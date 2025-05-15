@@ -9,10 +9,12 @@ if (require('electron-squirrel-startup')) {
 
 // 保存最近打开的文件路径
 let currentFilePath = null;
+// 保存主窗口引用
+let mainWindow = null;
 
 const createWindow = () => {
   // Create the browser window.
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
@@ -22,6 +24,15 @@ const createWindow = () => {
     },
     titleBarStyle: 'hiddenInset', // 在macOS上创建更好看的标题栏
     backgroundColor: '#FFF',
+  });
+
+  // 监听窗口全屏状态变化
+  mainWindow.on('enter-full-screen', () => {
+    mainWindow.webContents.send('fullscreen-change', true);
+  });
+  
+  mainWindow.on('leave-full-screen', () => {
+    mainWindow.webContents.send('fullscreen-change', false);
   });
 
   // and load the index.html of the app.
@@ -212,6 +223,11 @@ app.whenReady().then(() => {
     } catch (error) {
       return { success: false, error: error.message };
     }
+  });
+  
+  // 处理全屏状态检查请求
+  ipcMain.handle('is-fullscreen', () => {
+    return mainWindow ? mainWindow.isFullScreen() : false;
   });
 
   // On OS X it's common to re-create a window in the app when the
