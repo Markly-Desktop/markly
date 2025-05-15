@@ -1,0 +1,236 @@
+const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
+const path = require('node:path');
+const fs = require('fs-extra');
+
+// Handle creating/removing shortcuts on Windows when installing/uninstalling.
+if (require('electron-squirrel-startup')) {
+  app.quit();
+}
+
+// 保存最近打开的文件路径
+let currentFilePath = null;
+
+const createWindow = () => {
+  // Create the browser window.
+  const mainWindow = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    webPreferences: {
+      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    titleBarStyle: 'hiddenInset', // 在macOS上创建更好看的标题栏
+    backgroundColor: '#FFF',
+  });
+
+  // and load the index.html of the app.
+  mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+
+  // 设置应用菜单
+  const template = [
+    {
+      label: '文件',
+      submenu: [
+        {
+          label: '新建',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => {
+            mainWindow.webContents.send('file-new');
+            currentFilePath = null;
+            mainWindow.setTitle('Markly - 未命名');
+          }
+        },
+        {
+          label: '打开',
+          accelerator: 'CmdOrCtrl+O',
+          click: async () => {
+            const { canceled, filePaths } = await dialog.showOpenDialog({
+              properties: ['openFile'],
+              filters: [
+                { name: 'Markdown 文件', extensions: ['md', 'markdown'] },
+                { name: '所有文件', extensions: ['*'] }
+              ]
+            });
+            
+            if (!canceled && filePaths.length > 0) {
+              const filePath = filePaths[0];
+              try {
+                const content = await fs.readFile(filePath, 'utf8');
+                mainWindow.webContents.send('file-opened', { content, filePath });
+                currentFilePath = filePath;
+                mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
+              } catch (error) {
+                dialog.showErrorBox('打开文件失败', error.message);
+              }
+            }
+          }
+        },
+        {
+          label: '保存',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => {
+            if (currentFilePath) {
+              mainWindow.webContents.send('save-file', { filePath: currentFilePath });
+            } else {
+              mainWindow.webContents.send('save-file-as');
+            }
+          }
+        },
+        {
+          label: '另存为',
+          accelerator: 'CmdOrCtrl+Shift+S',
+          click: () => {
+            mainWindow.webContents.send('save-file-as');
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '退出',
+          role: 'quit',
+          accelerator: 'CmdOrCtrl+Q'
+        }
+      ]
+    },
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo', label: '撤销' },
+        { role: 'redo', label: '重做' },
+        { type: 'separator' },
+        { role: 'cut', label: '剪切' },
+        { role: 'copy', label: '复制' },
+        { role: 'paste', label: '粘贴' },
+        { role: 'delete', label: '删除' },
+        { type: 'separator' },
+        { role: 'selectAll', label: '全选' }
+      ]
+    },
+    {
+      label: '视图',
+      submenu: [
+        {
+          label: '切换编辑/预览模式',
+          accelerator: 'CmdOrCtrl+E',
+          click: () => {
+            mainWindow.webContents.send('toggle-mode');
+          }
+        },
+        { type: 'separator' },
+        { role: 'reload', label: '重新加载' },
+        { role: 'forceReload', label: '强制重新加载' },
+        { role: 'toggleDevTools', label: '开发者工具' },
+        { type: 'separator' },
+        { role: 'resetZoom', label: '实际大小' },
+        { role: 'zoomIn', label: '放大' },
+        { role: 'zoomOut', label: '缩小' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: '切换全屏' }
+      ]
+    },
+    {
+      role: 'help',
+      label: '帮助',
+      submenu: [
+        {
+          label: '关于',
+          click: async () => {
+            dialog.showMessageBox({
+              title: '关于 Markly',
+              message: 'Markly - 简洁高效的 Markdown 编辑器',
+              detail: `版本: ${app.getVersion()}\n© ${new Date().getFullYear()} Markly Team`
+            });
+          }
+        }
+      ]
+    }
+  ];
+
+  // macOS 特定的菜单调整
+  if (process.platform === 'darwin') {
+    template.unshift({
+      label: app.name,
+      submenu: [
+        { role: 'about', label: '关于 Markly' },
+        { type: 'separator' },
+        { role: 'services', label: '服务' },
+        { type: 'separator' },
+        { role: 'hide', label: '隐藏 Markly' },
+        { role: 'hideOthers', label: '隐藏其他' },
+        { role: 'unhide', label: '显示全部' },
+        { type: 'separator' },
+        { role: 'quit', label: '退出 Markly' }
+      ]
+    });
+  }
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+
+  // 只在开发环境下打开开发工具
+  if (process.env.NODE_ENV === 'development') {
+    mainWindow.webContents.openDevTools();
+  }
+};
+
+// This method will be called when Electron has finished
+// initialization and is ready to create browser windows.
+// Some APIs can only be used after this event occurs.
+app.whenReady().then(() => {
+  createWindow();
+
+  // 处理文件保存的请求
+  ipcMain.handle('save-file-dialog', async (_, { content, defaultPath }) => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      defaultPath,
+      filters: [
+        { name: 'Markdown 文件', extensions: ['md'] },
+        { name: '所有文件', extensions: ['*'] }
+      ]
+    });
+
+    if (!canceled && filePath) {
+      try {
+        await fs.writeFile(filePath, content, 'utf8');
+        currentFilePath = filePath;
+        return { success: true, filePath };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    }
+    
+    return { success: false };
+  });
+
+  // 处理文件保存的请求
+  ipcMain.handle('save-current-file', async (_, { content }) => {
+    if (!currentFilePath) return { success: false, error: '没有指定文件路径' };
+    
+    try {
+      await fs.writeFile(currentFilePath, content, 'utf8');
+      return { success: true, filePath: currentFilePath };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // On OS X it's common to re-create a window in the app when the
+  // dock icon is clicked and there are no other windows open.
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+
+// Quit when all windows are closed, except on macOS. There, it's common
+// for applications and their menu bar to stay active until the user quits
+// explicitly with Cmd + Q.
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+// In this file you can include the rest of your app's specific main process
+// code. You can also put them in separate files and import them here.

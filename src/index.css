@@ -1,0 +1,64 @@
+/* 移除了 Tailwind 导入指令，因为已经在 tailwind.css 中导入 */
+/* 保留自定义样式 */
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.tiptap-editor {
+  @apply p-4 h-full outline-none overflow-y-auto;
+}
+
+.tiptap-editor p {
+  @apply my-2;
+}
+
+.tiptap-editor h1 {
+  @apply text-3xl font-bold my-4;
+}
+
+.tiptap-editor h2 {
+  @apply text-2xl font-bold my-3;
+}
+
+.tiptap-editor h3 {
+  @apply text-xl font-bold my-2;
+}
+
+.tiptap-editor blockquote {
+  @apply border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic my-4;
+}
+
+.tiptap-editor ul, 
+.tiptap-editor ol {
+  @apply pl-6 my-2;
+}
+
+.tiptap-editor ul {
+  @apply list-disc;
+}
+
+.tiptap-editor ol {
+  @apply list-decimal;
+}
+
+.tiptap-editor code {
+  @apply font-mono bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded;
+}
+
+.tiptap-editor pre {
+  @apply font-mono bg-gray-100 dark:bg-gray-800 p-4 rounded my-4 overflow-x-auto;
+}
+
+.tiptap-editor a {
+  @apply text-blue-600 dark:text-blue-400 underline;
+}
+
+.tiptap-editor img {
+  @apply max-w-full h-auto my-4;
+}
