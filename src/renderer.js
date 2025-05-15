@@ -592,13 +592,34 @@ const openFile = async (filePath) => {
       updateFilePath(result.filePath);
       updateWordCount(html);
       
-      // 刷新文件列表以突出显示当前文件
-      await loadFileList();
+      // 不再刷新整个文件列表，只更新高亮状态
+      updateFileHighlight(filePath);
     }
   } catch (error) {
     console.error('打开文件失败:', error);
     alert(`打开文件失败: ${error.message}`);
   }
+};
+
+// 更新文件高亮状态
+const updateFileHighlight = (highlightPath) => {
+  // 更新当前文件路径
+  currentFilePath = highlightPath;
+  
+  // 查找所有文件项
+  const fileItems = document.querySelectorAll('.file-item');
+  
+  // 移除所有高亮
+  fileItems.forEach(item => {
+    item.classList.remove('bg-gray-200', 'dark:bg-gray-700');
+  });
+  
+  // 添加高亮到当前文件
+  fileItems.forEach(item => {
+    if (item.dataset.path === highlightPath) {
+      item.classList.add('bg-gray-200', 'dark:bg-gray-700');
+    }
+  });
 };
 
 // 绑定 IPC 事件
