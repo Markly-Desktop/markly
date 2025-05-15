@@ -42,6 +42,7 @@ let editor;
 let currentContent = '';
 let currentFilePath = null;
 let editorMode = 'edit'; // 'edit' 或 'preview'
+let previewTimeout; // 用于防抖预览更新
 
 // 初始化 Tiptap 编辑器
 const initEditor = () => {
@@ -66,18 +67,52 @@ const initEditor = () => {
       const content = editor.getHTML();
       currentContent = content;
       updateWordCount(content);
-      updatePreview(content);
+      debouncedUpdatePreview(content); // 改为防抖更新预览
     }
   });
+
+  // 添加默认样式，保留占位符和预览淡入淡出效果
+  const style = document.createElement('style');
+  style.textContent = `
+    .ProseMirror {
+      position: relative;
+    }
+    .ProseMirror:focus {
+      outline: none;
+    }
+    .ProseMirror p.is-editor-empty:first-child::before {
+      color: #adb5bd;
+      content: attr(data-placeholder);
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+    }
+    #preview-content {
+      opacity: 1;
+      transition: opacity 0.2s ease-in-out;
+    }
+  `;
+  document.head.appendChild(style);
 
   console.log('Tiptap 编辑器已初始化');
 };
 
-// 更新预览
+// 防抖函数：延迟触发预览更新
+const debouncedUpdatePreview = (content) => {
+  clearTimeout(previewTimeout);
+  previewTimeout = setTimeout(() => updatePreview(content), 200);
+};
+
+// 更新预览，使用 requestAnimationFrame 平滑切换
 const updatePreview = (content) => {
   const previewContent = document.getElementById('preview-content');
-  const markdownContent = htmlToMarkdown(content);
-  previewContent.innerHTML = marked.parse(markdownContent);
+  previewContent.style.opacity = '0';
+  requestAnimationFrame(() => {
+    const markdownContent = htmlToMarkdown(content);
+    previewContent.innerHTML = marked.parse(markdownContent);
+    previewContent.style.opacity = '1';
+  });
 };
 
 // 简单的 HTML 转 Markdown 逻辑

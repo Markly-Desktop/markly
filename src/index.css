@@ -11,7 +11,47 @@ body {
 }
 
 .tiptap-editor {
-  @apply p-4 h-full outline-none overflow-y-auto;
+  @apply p-4 h-full overflow-y-auto;
+}
+
+/* 编辑器样式重置 */
+.tiptap-editor .ProseMirror {
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+  /* 恢复基本光标样式 */
+  caret-color: currentColor;
+}
+
+/* 确保提示词不闪烁 - 更加明确的选择器和样式 */
+.tiptap-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #adb5bd;
+  pointer-events: none;
+  height: 0;
+  animation: none !important;
+  opacity: 1 !important;
+  /* 确保提示词样式不受其他动画影响 */
+  transition: none !important;
+  /* 防止继承父元素的闪烁动画 */
+  position: relative;
+  z-index: 1;
+  /* 确保显示清晰 */
+  text-shadow: none;
+  font-weight: normal;
+}
+
+/* 移除选中区域默认样式 */
+.tiptap-editor .ProseMirror *::selection {
+  background-color: rgba(66, 135, 245, 0.2) !important;
+}
+
+/* 确保没有自定义轮廓或突出显示 */
+.tiptap-editor *:focus {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 .tiptap-editor p {
