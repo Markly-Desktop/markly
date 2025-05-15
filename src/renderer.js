@@ -331,6 +331,8 @@ const loadFileList = async () => {
         
         const fileItem = document.createElement('div');
         fileItem.className = 'file-item flex items-center p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-700 cursor-pointer';
+        fileItem.dataset.path = file.path; // 将文件路径存储在dataset中
+        fileItem.dataset.name = file.name; // 将文件名存储在dataset中
         
         // 如果是当前打开的文件，添加突出显示
         if (currentFilePath === file.path) {
@@ -354,6 +356,12 @@ const loadFileList = async () => {
           await openFile(file.path);
         });
         
+        // 添加右键菜单事件
+        fileItem.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          showFileContextMenu(fileItem, file);
+        });
+        
         fileItems.appendChild(fileItem);
       });
     } else if (result && result.error) {
@@ -374,6 +382,201 @@ const loadFileList = async () => {
     }
   } catch (error) {
     console.error('加载文件列表失败:', error);
+  }
+};
+
+// 显示文件右键菜单
+const showFileContextMenu = (fileItem, file) => {
+  // 移除任何已存在的菜单
+  removeFileContextMenu();
+  
+  // 创建上下文菜单
+  const contextMenu = document.createElement('div');
+  contextMenu.id = 'file-context-menu';
+  contextMenu.className = 'absolute z-50 bg-white dark:bg-gray-800 shadow-md rounded border border-gray-200 dark:border-gray-700 py-1';
+  
+  // 计算菜单位置
+  const rect = fileItem.getBoundingClientRect();
+  contextMenu.style.left = `${rect.left}px`;
+  contextMenu.style.top = `${rect.bottom}px`;
+  contextMenu.style.minWidth = '120px';
+  
+  // 添加重命名选项
+  const renameItem = document.createElement('div');
+  renameItem.className = 'px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center';
+  renameItem.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-edit-2 mr-2">
+      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path>
+    </svg>
+    <span>重命名</span>
+  `;
+  renameItem.addEventListener('click', () => {
+    renameFile(file.path, file.name);
+    removeFileContextMenu();
+  });
+  contextMenu.appendChild(renameItem);
+  
+  // 添加删除选项
+  const deleteItem = document.createElement('div');
+  deleteItem.className = 'px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer text-red-500 flex items-center';
+  deleteItem.innerHTML = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-trash-2 mr-2">
+      <polyline points="3 6 5 6 21 6"></polyline>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      <line x1="10" y1="11" x2="10" y2="17"></line>
+      <line x1="14" y1="11" x2="14" y2="17"></line>
+    </svg>
+    <span>删除</span>
+  `;
+  deleteItem.addEventListener('click', () => {
+    deleteFile(file.path);
+    removeFileContextMenu();
+  });
+  contextMenu.appendChild(deleteItem);
+  
+  // 添加到文档中
+  document.body.appendChild(contextMenu);
+  
+  // 点击外部区域关闭菜单
+  document.addEventListener('click', removeFileContextMenu);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') removeFileContextMenu();
+  });
+};
+
+// 移除文件上下文菜单
+const removeFileContextMenu = () => {
+  const menu = document.getElementById('file-context-menu');
+  if (menu) {
+    menu.remove();
+    document.removeEventListener('click', removeFileContextMenu);
+  }
+};
+
+// 显示重命名对话框
+const showRenameModal = (oldFilePath, oldName) => {
+  // 获取不带扩展名的文件名
+  const nameWithoutExt = oldName.replace(/\.[^/.]+$/, '');
+  
+  // 获取对话框元素
+  const modal = document.getElementById('rename-modal');
+  const input = document.getElementById('new-filename');
+  
+  // 设置初始值
+  input.value = nameWithoutExt;
+  
+  // 显示对话框
+  if (modal) {
+    modal.classList.remove('hidden');
+    
+    // 自动聚焦到输入框并全选内容
+    setTimeout(() => {
+      input.focus();
+      input.select();
+    }, 100);
+    
+    // 绑定确认事件
+    const btnConfirm = document.getElementById('btn-confirm-rename');
+    const confirmHandler = async () => {
+      const newName = input.value.trim();
+      if (newName && newName !== nameWithoutExt) {
+        try {
+          closeRenameModal();
+          const result = await window.electronAPI.renameFile(oldFilePath, newName);
+          
+          if (result.success) {
+            // 如果是当前打开的文件，更新文件路径显示
+            if (currentFilePath === oldFilePath) {
+              updateFilePath(result.newPath);
+            }
+            
+            // 刷新文件列表
+            await loadFileList();
+          } else {
+            alert(`重命名文件失败: ${result.error}`);
+          }
+        } catch (error) {
+          console.error('重命名文件失败:', error);
+          alert(`重命名文件失败: ${error.message}`);
+        }
+      } else {
+        closeRenameModal();
+      }
+      
+      // 清除事件监听器
+      btnConfirm.removeEventListener('click', confirmHandler);
+    };
+    
+    btnConfirm.addEventListener('click', confirmHandler);
+    
+    // 绑定取消事件
+    const btnCancel = document.getElementById('btn-cancel-rename');
+    const btnClose = document.getElementById('btn-close-rename');
+    
+    const cancelHandler = () => {
+      closeRenameModal();
+      btnCancel.removeEventListener('click', cancelHandler);
+      btnClose.removeEventListener('click', cancelHandler);
+    };
+    
+    btnCancel.addEventListener('click', cancelHandler);
+    btnClose.addEventListener('click', cancelHandler);
+    
+    // 按下回车键确认
+    const keyHandler = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        btnConfirm.click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeRenameModal();
+      }
+    };
+    
+    input.addEventListener('keydown', keyHandler);
+    
+    // 记录事件处理器以便后续移除
+    modal.dataset.keyHandler = true;
+  }
+};
+
+// 关闭重命名对话框
+const closeRenameModal = () => {
+  const modal = document.getElementById('rename-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+    
+    // 清除输入框事件监听
+    if (modal.dataset.keyHandler) {
+      const input = document.getElementById('new-filename');
+      input.removeEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === 'Escape') e.preventDefault();
+      });
+      delete modal.dataset.keyHandler;
+    }
+  }
+};
+
+// 重命名文件
+const renameFile = async (filePath, oldName) => {
+  showRenameModal(filePath, oldName);
+};
+
+// 删除文件
+const deleteFile = async (filePath) => {
+  try {
+    const result = await window.electronAPI.deleteFile(filePath);
+    
+    if (result.success) {
+      // 文件已被删除，刷新列表
+      await loadFileList();
+    } else if (!result.canceled) {
+      // 非用户取消的错误
+      alert(`删除文件失败: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('删除文件失败:', error);
+    alert(`删除文件失败: ${error.message}`);
   }
 };
 

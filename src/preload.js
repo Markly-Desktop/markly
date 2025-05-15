@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openFile: (filePath) => ipcRenderer.invoke('open-file', { filePath }),
   createNewFile: (fileName) => ipcRenderer.invoke('create-new-file', { fileName }),
   
+  // 新增: 文件重命名和删除操作
+  renameFile: (oldPath, newName) => ipcRenderer.invoke('rename-file', { oldPath, newName }),
+  deleteFile: (filePath) => ipcRenderer.invoke('delete-file', { filePath }),
+  
   // 新增: 自动保存
   contentChanged: (content) => ipcRenderer.send('content-changed', content),
 

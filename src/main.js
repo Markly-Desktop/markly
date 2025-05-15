@@ -396,6 +396,81 @@ app.whenReady().then(() => {
     }, 5000); // 5秒后自动保存
   });
 
+  // 重命名文件
+  ipcMain.handle('rename-file', async (_, { oldPath, newName }) => {
+    try {
+      const dirPath = path.dirname(oldPath);
+      const fileExt = path.extname(oldPath);
+      const newPath = path.join(dirPath, newName);
+      
+      // 确保新文件名有 .md 后缀
+      const finalPath = newPath.endsWith(fileExt) ? newPath : `${newPath}${fileExt}`;
+      
+      // 检查文件是否已存在
+      const fileExists = await fs.pathExists(finalPath);
+      if (fileExists) {
+        return { 
+          success: false, 
+          error: `文件 "${path.basename(finalPath)}" 已存在` 
+        };
+      }
+      
+      // 重命名文件
+      await fs.rename(oldPath, finalPath);
+      
+      // 如果是当前打开的文件，更新路径
+      if (currentFilePath === oldPath) {
+        currentFilePath = finalPath;
+        mainWindow.setTitle(`Markly - ${path.basename(finalPath)}`);
+        // 更新存储的最近打开文件
+        store.set('lastOpenedFile', finalPath);
+      }
+      
+      return { 
+        success: true, 
+        newPath: finalPath,
+        fileName: path.basename(finalPath)
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // 删除文件
+  ipcMain.handle('delete-file', async (_, { filePath }) => {
+    try {
+      // 确认删除
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        buttons: ['取消', '删除'],
+        defaultId: 0,
+        title: '确认删除',
+        message: `您确定要删除 "${path.basename(filePath)}" 吗？`,
+        detail: '此操作无法撤销。'
+      });
+      
+      // 如果用户取消，返回
+      if (response === 0) {
+        return { success: false, canceled: true };
+      }
+      
+      // 删除文件
+      await fs.unlink(filePath);
+      
+      // 如果删除的是当前打开的文件，清空编辑器
+      if (currentFilePath === filePath) {
+        currentFilePath = null;
+        mainWindow.setTitle('Markly - 未命名');
+        store.delete('lastOpenedFile');
+        mainWindow.webContents.send('file-new');
+      }
+      
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   // On OS X it's common to re-create a window in the app when the
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
