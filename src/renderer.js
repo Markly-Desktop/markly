@@ -43,6 +43,9 @@ let currentContent = '';
 let currentFilePath = null;
 let editorMode = 'edit'; // 'edit' 或 'preview'
 let previewTimeout; // 用于防抖预览更新
+let settings = { // 用户设置
+  rootDirectory: ''
+};
 
 // 初始化 Tiptap 编辑器
 const initEditor = () => {
@@ -337,6 +340,8 @@ const init = () => {
   initEditor();
   bindToolbarEvents();
   bindIpcEvents();
+  bindSettingsEvents(); // 绑定设置界面的事件处理
+  loadSettings(); // 加载已保存的设置
   
   // 给窗口一点时间加载并建立IPC通道
   setTimeout(() => {
@@ -351,6 +356,94 @@ const init = () => {
       if (!macSafeArea) return;
       
       macSafeArea.style.display = isFullscreen ? 'none' : 'flex';
+    });
+  }
+};
+
+// 加载设置
+const loadSettings = async () => {
+  try {
+    if (window.electronAPI && typeof window.electronAPI.getSettings === 'function') {
+      settings = await window.electronAPI.getSettings();
+      
+      // 更新界面显示
+      const rootDirectoryPathInput = document.getElementById('root-directory-path');
+      if (rootDirectoryPathInput && settings.rootDirectory) {
+        rootDirectoryPathInput.value = settings.rootDirectory;
+      }
+    }
+  } catch (error) {
+    console.error('加载设置失败:', error);
+  }
+};
+
+// 保存设置
+const saveSettings = async () => {
+  try {
+    if (window.electronAPI && typeof window.electronAPI.updateSettings === 'function') {
+      await window.electronAPI.updateSettings(settings);
+      console.log('设置已保存');
+    }
+  } catch (error) {
+    console.error('保存设置失败:', error);
+  }
+};
+
+// 打开设置弹窗
+const openSettingsModal = () => {
+  const modal = document.getElementById('settings-modal');
+  if (modal) {
+    modal.classList.remove('hidden');
+  }
+};
+
+// 关闭设置弹窗
+const closeSettingsModal = () => {
+  const modal = document.getElementById('settings-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+  }
+};
+
+// 绑定设置界面事件
+const bindSettingsEvents = () => {
+  // 打开设置
+  const btnSettings = document.getElementById('btn-settings');
+  if (btnSettings) {
+    btnSettings.addEventListener('click', openSettingsModal);
+  }
+  
+  // 关闭设置
+  const btnCloseSettings = document.getElementById('btn-close-settings');
+  if (btnCloseSettings) {
+    btnCloseSettings.addEventListener('click', closeSettingsModal);
+  }
+  
+  // 选择根目录
+  const btnSelectDirectory = document.getElementById('btn-select-directory');
+  if (btnSelectDirectory) {
+    btnSelectDirectory.addEventListener('click', async () => {
+      try {
+        const result = await window.electronAPI.selectDirectory();
+        if (result && result.success) {
+          const rootDirectoryPathInput = document.getElementById('root-directory-path');
+          if (rootDirectoryPathInput) {
+            rootDirectoryPathInput.value = result.path;
+            settings.rootDirectory = result.path;
+          }
+        }
+      } catch (error) {
+        console.error('选择目录失败:', error);
+      }
+    });
+  }
+  
+  // 保存设置
+  const btnSaveSettings = document.getElementById('btn-save-settings');
+  if (btnSaveSettings) {
+    btnSaveSettings.addEventListener('click', async () => {
+      await saveSettings();
+      closeSettingsModal();
     });
   }
 };

@@ -1,6 +1,12 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('fs-extra');
+// 导入 electron-store，尝试使用 default 属性
+const ElectronStore = require('electron-store');
+const Store = ElectronStore.default || ElectronStore;
+
+// 初始化设置存储
+const store = new Store();
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -230,8 +236,36 @@ app.whenReady().then(() => {
     return mainWindow ? mainWindow.isFullScreen() : false;
   });
 
+  // 获取设置
+  ipcMain.handle('get-settings', () => {
+    return {
+      rootDirectory: store.get('rootDirectory')
+    };
+  });
+
+  // 更新设置
+  ipcMain.handle('update-settings', (_, settings) => {
+    if (settings.rootDirectory) {
+      store.set('rootDirectory', settings.rootDirectory);
+    }
+    return { success: true };
+  });
+
+  // 选择根目录
+  ipcMain.handle('select-directory', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: '选择根目录'
+    });
+    
+    if (!canceled && filePaths.length > 0) {
+      return { success: true, path: filePaths[0] };
+    }
+    
+    return { success: false };
+  });
+
   // On OS X it's common to re-create a window in the app when the
-  // dock icon is clicked and there are no other windows open.
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();

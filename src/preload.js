@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   isFullScreen: () => ipcRenderer.invoke('is-fullscreen'),
   onFullScreenChange: (callback) => ipcRenderer.on('fullscreen-change', callback),
 
+  // 设置相关API
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  updateSettings: (settings) => ipcRenderer.invoke('update-settings', settings),
+  selectDirectory: () => ipcRenderer.invoke('select-directory'),
+
   // 清除所有监听器
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
 });
