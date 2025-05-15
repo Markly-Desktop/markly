@@ -316,8 +316,19 @@ const loadFileList = async () => {
     
     const result = await window.electronAPI.listFiles();
     if (result && result.success && result.files) {
+      // 创建一个 Set 来跟踪已添加的文件路径，用于去重
+      const addedFilePaths = new Set();
+      
       // 遍历文件并创建列表项
       result.files.forEach(file => {
+        // 如果文件路径已经添加过，则跳过
+        if (addedFilePaths.has(file.path)) {
+          return;
+        }
+        
+        // 添加到已处理集合中
+        addedFilePaths.add(file.path);
+        
         const fileItem = document.createElement('div');
         fileItem.className = 'file-item flex items-center p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-700 cursor-pointer';
         
@@ -454,18 +465,28 @@ const updateMacSafeArea = async () => {
 const init = async () => {
   initEditor();
   bindToolbarEvents();
-  bindIpcEvents();
-  bindSettingsEvents(); // 绑定设置界面的事件处理
-  await loadSettings(); // 加载已保存的设置
   
-  // 加载文件列表
-  await loadFileList();
+  // 首先绑定IPC事件，确保能处理主进程发送的file-opened消息
+  bindIpcEvents();
+  
+  // 绑定设置界面的事件处理
+  bindSettingsEvents(); 
+  
+  // 加载已保存的设置
+  await loadSettings();
   
   // 给窗口一点时间加载并建立IPC通道
   setTimeout(() => {
     // 初始化时检查全屏状态
     updateMacSafeArea();
-  }, 500);
+    
+    // 只有当没有通过IPC事件加载文件时才主动加载文件列表
+    // 延迟加载文件列表，避免和主进程发送的file-opened事件冲突
+    // 因为如果主进程会发送file-opened事件，该事件的处理程序中会调用loadFileList
+    if (!currentFilePath) {
+      loadFileList();
+    }
+  }, 300);
   
   // 监听全屏状态变化
   if (window.electronAPI && typeof window.electronAPI.onFullScreenChange === 'function') {

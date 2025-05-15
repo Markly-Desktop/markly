@@ -48,6 +48,24 @@ const createWindow = () => {
   // and load the index.html of the app.
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
+  // 尝试恢复上次打开的文件
+  mainWindow.webContents.on('did-finish-load', () => {
+    const lastOpenedFilePath = store.get('lastOpenedFile');
+    if (lastOpenedFilePath) {
+      try {
+        // 检查文件是否存在
+        if (fs.existsSync(lastOpenedFilePath)) {
+          const content = fs.readFileSync(lastOpenedFilePath, 'utf8');
+          mainWindow.webContents.send('file-opened', { content, filePath: lastOpenedFilePath });
+          currentFilePath = lastOpenedFilePath;
+          mainWindow.setTitle(`Markly - ${path.basename(lastOpenedFilePath)}`);
+        }
+      } catch (error) {
+        console.error('恢复上次文件失败:', error.message);
+      }
+    }
+  });
+
   // 设置应用菜单
   const template = [
     {
@@ -81,6 +99,7 @@ const createWindow = () => {
                 mainWindow.webContents.send('file-opened', { content, filePath });
                 currentFilePath = filePath;
                 mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
+                store.set('lastOpenedFile', filePath); // 保存最近打开的文件路径
               } catch (error) {
                 dialog.showErrorBox('打开文件失败', error.message);
               }
@@ -214,6 +233,7 @@ app.whenReady().then(() => {
       try {
         await fs.writeFile(filePath, content, 'utf8');
         currentFilePath = filePath;
+        store.set('lastOpenedFile', filePath); // 保存最近打开的文件路径
         return { success: true, filePath };
       } catch (error) {
         return { success: false, error: error.message };
@@ -229,6 +249,7 @@ app.whenReady().then(() => {
     
     try {
       await fs.writeFile(currentFilePath, content, 'utf8');
+      store.set('lastOpenedFile', currentFilePath); // 保存最近打开的文件路径
       return { success: true, filePath: currentFilePath };
     } catch (error) {
       return { success: false, error: error.message };
@@ -306,6 +327,7 @@ app.whenReady().then(() => {
       const content = await fs.readFile(filePath, 'utf8');
       currentFilePath = filePath;
       mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
+      store.set('lastOpenedFile', filePath); // 保存最近打开的文件路径
       return { success: true, content, filePath };
     } catch (error) {
       return { success: false, error: error.message };
@@ -366,6 +388,7 @@ app.whenReady().then(() => {
       if (currentFilePath) {
         try {
           await fs.writeFile(currentFilePath, currentContent, 'utf8');
+          store.set('lastOpenedFile', currentFilePath); // 保存最近打开的文件路径
         } catch (error) {
           console.error('自动保存失败:', error.message);
         }
