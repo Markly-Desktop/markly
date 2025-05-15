@@ -71,6 +71,12 @@ const initEditor = () => {
       currentContent = content;
       updateWordCount(content);
       debouncedUpdatePreview(content); // 改为防抖更新预览
+
+      // 内容更改时触发自动保存
+      if (window.electronAPI && typeof window.electronAPI.contentChanged === 'function') {
+        const markdownContent = htmlToMarkdown(content);
+        window.electronAPI.contentChanged(markdownContent);
+      }
     }
   });
 
@@ -269,16 +275,123 @@ const bindToolbarEvents = () => {
   
   // 切换模式按钮
   document.getElementById('btn-toggle-mode').addEventListener('click', toggleMode);
+
+  // 新建文件按钮
+  document.getElementById('btn-new-file').addEventListener('click', async () => {
+    // 调用创建新文件的方法
+    await createNewFile();
+  });
+};
+
+// 新建文件
+const createNewFile = async () => {
+  try {
+    const result = await window.electronAPI.createNewFile('Untitled.md');
+    if (result && result.success) {
+      // 清空编辑器内容
+      editor.commands.clearContent();
+      currentContent = '';
+      // 更新路径显示
+      updateFilePath(result.filePath);
+      // 刷新文件列表
+      await loadFileList();
+    } else if (result && result.error) {
+      alert(`创建文件失败: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('创建新文件时出错:', error);
+    alert(`创建文件失败: ${error.message}`);
+  }
+};
+
+// 加载文件列表
+const loadFileList = async () => {
+  try {
+    const fileItems = document.querySelector('.file-items');
+    
+    // 清空现有文件列表
+    while (fileItems.firstChild) {
+      fileItems.removeChild(fileItems.firstChild);
+    }
+    
+    const result = await window.electronAPI.listFiles();
+    if (result && result.success && result.files) {
+      // 遍历文件并创建列表项
+      result.files.forEach(file => {
+        const fileItem = document.createElement('div');
+        fileItem.className = 'file-item flex items-center p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-700 cursor-pointer';
+        
+        // 如果是当前打开的文件，添加突出显示
+        if (currentFilePath === file.path) {
+          fileItem.classList.add('bg-gray-200', 'dark:bg-gray-700');
+        }
+        
+        fileItem.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-file-text mr-2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          <span class="text-sm truncate" title="${file.name}">${file.name}</span>
+        `;
+        
+        // 添加点击事件处理器
+        fileItem.addEventListener('click', async () => {
+          // 如果文件已经被修改，可以提示保存
+          await openFile(file.path);
+        });
+        
+        fileItems.appendChild(fileItem);
+      });
+    } else if (result && result.error) {
+      // 显示设置根目录的提示
+      fileItems.innerHTML = `
+        <div class="p-4 text-center text-gray-500">
+          <p>${result.error}</p>
+          <button id="btn-open-settings" class="mt-2 px-2 py-1 bg-blue-500 text-white rounded text-sm">
+            设置根目录
+          </button>
+        </div>
+      `;
+      
+      const btnOpenSettings = document.getElementById('btn-open-settings');
+      if (btnOpenSettings) {
+        btnOpenSettings.addEventListener('click', openSettingsModal);
+      }
+    }
+  } catch (error) {
+    console.error('加载文件列表失败:', error);
+  }
+};
+
+// 打开文件
+const openFile = async (filePath) => {
+  try {
+    const result = await window.electronAPI.openFile(filePath);
+    if (result && result.success) {
+      // 将 Markdown 转为 HTML 设置到编辑器中
+      const html = marked.parse(result.content);
+      editor.commands.setContent(html);
+      currentContent = html;
+      updateFilePath(result.filePath);
+      updateWordCount(html);
+      
+      // 刷新文件列表以突出显示当前文件
+      await loadFileList();
+    }
+  } catch (error) {
+    console.error('打开文件失败:', error);
+    alert(`打开文件失败: ${error.message}`);
+  }
 };
 
 // 绑定 IPC 事件
 const bindIpcEvents = () => {
   // 新建文件
-  window.electronAPI.onFileNew((event) => {
-    editor.commands.clearContent();
-    currentContent = '';
-    currentFilePath = null;
-    updateFilePath(null);
+  window.electronAPI.onFileNew(async (event) => {
+    await createNewFile();
   });
   
   // 文件被打开
@@ -289,6 +402,8 @@ const bindIpcEvents = () => {
     currentContent = html;
     updateFilePath(filePath);
     updateWordCount(html);
+    // 刷新文件列表以突出显示当前文件
+    loadFileList();
   });
   
   // 保存文件
@@ -336,12 +451,15 @@ const updateMacSafeArea = async () => {
 };
 
 // 初始化应用
-const init = () => {
+const init = async () => {
   initEditor();
   bindToolbarEvents();
   bindIpcEvents();
   bindSettingsEvents(); // 绑定设置界面的事件处理
-  loadSettings(); // 加载已保存的设置
+  await loadSettings(); // 加载已保存的设置
+  
+  // 加载文件列表
+  await loadFileList();
   
   // 给窗口一点时间加载并建立IPC通道
   setTimeout(() => {
@@ -383,6 +501,8 @@ const saveSettings = async () => {
     if (window.electronAPI && typeof window.electronAPI.updateSettings === 'function') {
       await window.electronAPI.updateSettings(settings);
       console.log('设置已保存');
+      // 保存设置后刷新文件列表
+      await loadFileList();
     }
   } catch (error) {
     console.error('保存设置失败:', error);

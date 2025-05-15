@@ -17,6 +17,10 @@ if (require('electron-squirrel-startup')) {
 let currentFilePath = null;
 // 保存主窗口引用
 let mainWindow = null;
+// 自动保存的计时器
+let autoSaveTimer = null;
+// 当前编辑的内容
+let currentContent = '';
 
 const createWindow = () => {
   // Create the browser window.
@@ -263,6 +267,110 @@ app.whenReady().then(() => {
     }
     
     return { success: false };
+  });
+
+  // 列出根目录下的文件
+  ipcMain.handle('list-files', async () => {
+    const rootDirectory = store.get('rootDirectory');
+    if (!rootDirectory) {
+      return { success: false, error: '没有设置根目录' };
+    }
+
+    try {
+      // 读取目录中的所有文件
+      const allFiles = await fs.readdir(rootDirectory);
+      // 过滤出所有 .md 文件
+      const files = await Promise.all(allFiles.map(async (file) => {
+        const filePath = path.join(rootDirectory, file);
+        const stats = await fs.stat(filePath);
+        return {
+          name: file,
+          path: filePath,
+          isDirectory: stats.isDirectory(),
+          isMarkdown: file.toLowerCase().endsWith('.md') || file.toLowerCase().endsWith('.markdown')
+        };
+      }));
+      
+      // 仅返回 Markdown 文件
+      const markdownFiles = files.filter(file => file.isMarkdown && !file.isDirectory);
+      
+      return { success: true, files: markdownFiles };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // 打开指定文件
+  ipcMain.handle('open-file', async (_, { filePath }) => {
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      currentFilePath = filePath;
+      mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
+      return { success: true, content, filePath };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // 创建新文件
+  ipcMain.handle('create-new-file', async (_, { fileName }) => {
+    const rootDirectory = store.get('rootDirectory');
+    if (!rootDirectory) {
+      return { success: false, error: '没有设置根目录' };
+    }
+
+    try {
+      // 确保文件名有 .md 后缀
+      let finalFileName = fileName;
+      if (!finalFileName.toLowerCase().endsWith('.md')) {
+        finalFileName += '.md';
+      }
+      
+      const filePath = path.join(rootDirectory, finalFileName);
+      
+      // 检查文件是否已存在
+      const fileExists = await fs.pathExists(filePath);
+      if (fileExists) {
+        // 如果文件已存在，自动增加序号
+        let counter = 1;
+        let newFilePath = filePath;
+        while (await fs.pathExists(newFilePath)) {
+          const nameWithoutExt = finalFileName.replace(/\.md$/, '');
+          newFilePath = path.join(rootDirectory, `${nameWithoutExt}(${counter}).md`);
+          counter++;
+        }
+        
+        // 创建新文件
+        await fs.writeFile(newFilePath, '', 'utf8');
+        currentFilePath = newFilePath;
+        return { success: true, filePath: newFilePath };
+      }
+      
+      // 创建新文件
+      await fs.writeFile(filePath, '', 'utf8');
+      currentFilePath = filePath;
+      mainWindow.setTitle(`Markly - ${finalFileName}`);
+      return { success: true, filePath };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // 自动保存
+  ipcMain.on('content-changed', (_, content) => {
+    currentContent = content;
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+    }
+    autoSaveTimer = setTimeout(async () => {
+      if (currentFilePath) {
+        try {
+          await fs.writeFile(currentFilePath, currentContent, 'utf8');
+        } catch (error) {
+          console.error('自动保存失败:', error.message);
+        }
+      }
+    }, 5000); // 5秒后自动保存
   });
 
   // On OS X it's common to re-create a window in the app when the

@@ -22,6 +22,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateSettings: (settings) => ipcRenderer.invoke('update-settings', settings),
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
 
+  // 新增: 文件列表和文件内容操作
+  listFiles: () => ipcRenderer.invoke('list-files'),
+  openFile: (filePath) => ipcRenderer.invoke('open-file', { filePath }),
+  createNewFile: (fileName) => ipcRenderer.invoke('create-new-file', { fileName }),
+  
+  // 新增: 自动保存
+  contentChanged: (content) => ipcRenderer.send('content-changed', content),
+
   // 清除所有监听器
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
 });
