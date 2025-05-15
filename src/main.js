@@ -207,10 +207,10 @@ const createWindow = () => {
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 
-  // 只在开发环境下打开开发工具
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.webContents.openDevTools();
-  }
+  // 只在开发环境下打开开发工具，且默认不启动
+  // if (process.env.NODE_ENV === 'development') {
+  //   mainWindow.webContents.openDevTools();
+  // }
 };
 
 // This method will be called when Electron has finished
