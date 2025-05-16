@@ -344,8 +344,20 @@ const createNewFile = async () => {
 };
 
 // 加载文件列表
+// 防止并发调用的锁
+let isLoadingFileList = false;
+
 const loadFileList = async () => {
+  // 如果已经在加载列表，等待当前操作完成
+  if (isLoadingFileList) {
+    console.log('文件列表正在加载中，跳过当前请求');
+    return;
+  }
+  
   try {
+    isLoadingFileList = true;
+    console.log('开始加载文件列表');
+    
     const fileItems = document.querySelector('.file-items');
     
     // 清空现有文件列表
@@ -362,6 +374,7 @@ const loadFileList = async () => {
       result.files.forEach(file => {
         // 如果文件路径已经添加过，则跳过
         if (addedFilePaths.has(file.path)) {
+          console.log(`跳过重复文件: ${file.path}`);
           return;
         }
         
@@ -421,6 +434,10 @@ const loadFileList = async () => {
     }
   } catch (error) {
     console.error('加载文件列表失败:', error);
+  } finally {
+    // 无论成功还是失败，都释放锁
+    isLoadingFileList = false;
+    console.log('文件列表加载锁已释放');
   }
 };
 
@@ -607,8 +624,15 @@ const deleteFile = async (filePath) => {
     const result = await window.electronAPI.deleteFile(filePath);
     
     if (result.success) {
-      // 文件已被删除，刷新列表
-      await loadFileList();
+      // 判断是否是当前打开的文件
+      const isCurrentFile = filePath === currentFilePath;
+      
+      // 如果不是当前打开的文件，才直接刷新列表
+      // 当前打开的文件会通过 onOpenRecentAfterDelete 事件刷新列表
+      if (!isCurrentFile) {
+        // 文件已被删除，刷新列表
+        await loadFileList();
+      }
     } else if (!result.canceled) {
       // 非用户取消的错误
       alert(`删除文件失败: ${result.error}`);
@@ -663,9 +687,22 @@ const updateFileHighlight = (highlightPath) => {
 
 // 绑定 IPC 事件
 const bindIpcEvents = () => {
-  // 新建文件
-  window.electronAPI.onFileNew(async (event) => {
-    await createNewFile();
+  // 监听新建文件事件
+  window.electronAPI.onFileNew(() => {
+    createNewFile();
+  });
+  
+  // 监听删除文件后打开最近文件的事件
+  window.electronAPI.onOpenRecentAfterDelete(async (_, { content, filePath }) => {
+    // 更新编辑器内容
+    editor.commands.setContent(content);
+    currentContent = content;
+    
+    // 更新路径显示
+    updateFilePath(filePath);
+    
+    // 刷新文件列表
+    await loadFileList();
   });
   
   // 文件被打开

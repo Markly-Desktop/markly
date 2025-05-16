@@ -86,10 +86,61 @@ let mainWindow = null;
 let autoSaveTimer = null;
 // 当前编辑的内容
 let currentContent = '';
+// 最近打开的文件历史记录 (最多保存10个)
+let recentFilesHistory = [];
 
 // 生成随机字符串作为文件名
 const generateRandomFileName = (extension) => {
   return `${crypto.randomBytes(8).toString('hex')}${extension}`;
+};
+
+// 更新文件历史记录
+const updateFileHistory = (filePath) => {
+  // 如果文件已经在历史记录中，先移除它
+  recentFilesHistory = recentFilesHistory.filter(path => path !== filePath);
+  
+  // 将文件添加到历史记录最前面
+  recentFilesHistory.unshift(filePath);
+  
+  // 限制历史记录最多保存10个文件
+  if (recentFilesHistory.length > 10) {
+    recentFilesHistory = recentFilesHistory.slice(0, 10);
+  }
+  
+  // 保存到持久化存储
+  store.set('recentFilesHistory', recentFilesHistory);
+};
+
+// 从文件历史中打开最近的文件
+const openRecentFile = async () => {
+  // 过滤掉当前文件和不存在的文件
+  let availableFiles = recentFilesHistory.filter(file => {
+    return file !== currentFilePath && fs.existsSync(file);
+  });
+  
+  if (availableFiles.length > 0) {
+    try {
+      const filePath = availableFiles[0]; // 获取最近的文件
+      const content = await fs.readFile(filePath, 'utf8');
+      
+      // 注意: 我们使用专门的事件来处理删除后打开文件的情况
+      // 避免触发普通的file-opened事件，因为这会导致文件列表重复刷新
+      mainWindow.webContents.send('open-recent-after-delete', { content, filePath });
+      
+      // 更新主进程的状态
+      currentFilePath = filePath;
+      mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
+      store.set('lastOpenedFile', filePath);
+      console.log(`已自动打开最近文件: ${filePath}`);
+      return true;
+    } catch (error) {
+      console.error('打开最近文件失败:', error.message);
+      return false;
+    }
+  } else {
+    console.log('没有可用的最近文件');
+  }
+  return false;
 };
 
 const createWindow = () => {
@@ -129,7 +180,9 @@ const createWindow = () => {
   // and load the index.html of the app.
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
-  // 尝试恢复上次打开的文件
+  // 加载文件历史记录
+  recentFilesHistory = store.get('recentFilesHistory') || [];
+  
   mainWindow.webContents.on('did-finish-load', () => {
     const lastOpenedFilePath = store.get('lastOpenedFile');
     if (lastOpenedFilePath) {
@@ -140,9 +193,18 @@ const createWindow = () => {
           mainWindow.webContents.send('file-opened', { content, filePath: lastOpenedFilePath });
           currentFilePath = lastOpenedFilePath;
           mainWindow.setTitle(`Markly - ${path.basename(lastOpenedFilePath)}`);
+          
+          // 确保当前文件也在历史记录中
+          updateFileHistory(lastOpenedFilePath);
+          console.log(`启动时自动恢复文件: ${lastOpenedFilePath}`);
+        } else {
+          // 如果上次打开的文件不存在，尝试打开最近的文件
+          openRecentFile();
         }
       } catch (error) {
         console.error('恢复上次文件失败:', error.message);
+        // 尝试打开最近的文件
+        openRecentFile();
       }
     }
   });
@@ -180,7 +242,12 @@ const createWindow = () => {
                 mainWindow.webContents.send('file-opened', { content, filePath });
                 currentFilePath = filePath;
                 mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
-                store.set('lastOpenedFile', filePath); // 保存最近打开的文件路径
+                
+                // 更新最近打开的文件历史
+                updateFileHistory(filePath);
+                
+                // 保存最近打开文件路径
+                store.set('lastOpenedFile', filePath);
               } catch (error) {
                 dialog.showErrorBox('打开文件失败', error.message);
               }
@@ -334,8 +401,14 @@ app.whenReady().then(() => {
     try {
       await fs.writeFile(currentFilePath, content, 'utf8');
       store.set('lastOpenedFile', currentFilePath); // 保存最近打开的文件路径
+      
+      // 更新文件历史记录
+      updateFileHistory(currentFilePath);
+      
+      console.log(`保存文件: ${currentFilePath}`);
       return { success: true, filePath: currentFilePath };
     } catch (error) {
+      console.error(`保存文件失败 ${currentFilePath}:`, error.message);
       return { success: false, error: error.message };
     }
   });
@@ -412,8 +485,14 @@ app.whenReady().then(() => {
       currentFilePath = filePath;
       mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
       store.set('lastOpenedFile', filePath); // 保存最近打开的文件路径
+      
+      // 将文件添加到最近打开历史记录
+      updateFileHistory(filePath);
+      
+      console.log(`打开文件: ${filePath}`);
       return { success: true, content, filePath };
     } catch (error) {
+      console.error(`打开文件失败 ${filePath}:`, error.message);
       return { success: false, error: error.message };
     }
   });
@@ -538,19 +617,77 @@ app.whenReady().then(() => {
         return { success: false, canceled: true };
       }
       
-      // 删除文件
-      await fs.unlink(filePath);
-      
-      // 如果删除的是当前打开的文件，清空编辑器
+      // 如果删除的是当前打开的文件，需要先关闭文件并准备打开最近文件
+      let shouldOpenRecent = false;
       if (currentFilePath === filePath) {
+        // 更新历史记录，从历史中移除要删除的文件
+        recentFilesHistory = recentFilesHistory.filter(path => path !== filePath);
+        store.set('recentFilesHistory', recentFilesHistory);
+        
+        // 暂时重置全局状态，但不发送 file-new 事件
+        // 我们在删除成功后会直接打开最近文件
         currentFilePath = null;
-        mainWindow.setTitle('Markly - 未命名');
-        store.delete('lastOpenedFile');
-        mainWindow.webContents.send('file-new');
+        
+        // 标记应该打开最近文件
+        shouldOpenRecent = true;
+        
+        // 等待一下以便引用归集
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
       
-      return { success: true };
+      try {
+        // 尝试删除文件
+        await fs.unlink(filePath);
+        console.log(`成功删除文件: ${filePath}`);
+        
+        // 如果标记了需要打开最近文件，尝试打开
+        const result = shouldOpenRecent ? await openRecentFile() : false;
+        if (shouldOpenRecent) {
+          console.log(result ? '成功打开最近文件' : '没有可用的最近文件');
+        }
+        
+        return { success: true };
+      } catch (unlinkError) {
+        console.error('删除文件失败:', unlinkError.message);
+        // 如果删除失败，尝试强制清理缓存并再次尝试
+        if (process.platform === 'win32') {
+          // Windows 上利用基于命令的删除
+          try {
+            require('child_process').execSync(`del "${filePath.replace(/"/g, '\"')}" /f`);
+            console.log(`成功使用命令强制删除文件: ${filePath}`);
+            
+            // 如果标记了需要打开最近文件，尝试打开
+            const result = shouldOpenRecent ? await openRecentFile() : false;
+            if (shouldOpenRecent) {
+              console.log(result ? '成功打开最近文件' : '没有可用的最近文件');
+            }
+            
+            return { success: true };
+          } catch (cmdError) {
+            console.error('相关原因:', cmdError.message);
+            throw new Error(`无法删除文件，可能被其他程序锁定: ${unlinkError.message}`);
+          }
+        } else {
+          // 在非 Windows 平台上强制删除
+          try {
+            require('child_process').execSync(`rm -f "${filePath.replace(/"/g, '\"')}"`);
+            console.log(`成功使用命令强制删除文件: ${filePath}`);
+            
+            // 如果标记了需要打开最近文件，尝试打开
+            const result = shouldOpenRecent ? await openRecentFile() : false;
+            if (shouldOpenRecent) {
+              console.log(result ? '成功打开最近文件' : '没有可用的最近文件');
+            }
+            
+            return { success: true };
+          } catch (cmdError) {
+            console.error('相关原因:', cmdError.message);
+            throw new Error(`无法删除文件，可能被其他程序锁定: ${unlinkError.message}`);
+          }
+        }
+      }
     } catch (error) {
+      console.error('删除文件错误:', error);
       return { success: false, error: error.message };
     }
   });
