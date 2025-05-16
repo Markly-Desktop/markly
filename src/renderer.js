@@ -140,10 +140,28 @@ const initEditor = () => {
       updateWordCount(content);
       debouncedUpdatePreview(content); // 改为防抖更新预览
 
-      // 内容更改时触发自动保存
+      // 只跟踪内容变化，不触发自动保存
       if (window.electronAPI && typeof window.electronAPI.contentChanged === 'function') {
         const markdownContent = htmlToMarkdown(content);
         window.electronAPI.contentChanged(markdownContent);
+      }
+    }
+  });
+  
+  // 监听编辑器的按键事件，按回车时保存
+  document.getElementById('editor').addEventListener('keydown', async (event) => {
+    // 断言：如果是回车键（Enter），就保存文件
+    if (event.key === 'Enter' && currentFilePath) {
+      console.log('[渲染进程] 检测到回车键按下，触发保存');
+      try {
+        const result = await window.electronAPI.saveOnEvent();
+        if (result && result.success) {
+          console.log(`[渲染进程] 按回车保存成功: ${result.filePath}`);
+        } else if (result) {
+          console.error(`[渲染进程] 保存失败: ${result.error}`);
+        }
+      } catch (error) {
+        console.error('[渲染进程] 保存时发生错误:', error);
       }
     }
   });
@@ -494,7 +512,25 @@ const loadFileList = async () => {
         
         // 添加点击事件处理器
         fileItem.addEventListener('click', async () => {
-          // 如果文件已经被修改，可以提示保存
+          console.log(`[渲染进程] 点击文件: ${file.path}`);
+          
+          // 如果当前有打开的文件且路径不同，先保存当前文件
+          if (currentFilePath && currentFilePath !== file.path) {
+            console.log(`[渲染进程] 切换文件前保存当前文件: ${currentFilePath}`);
+            try {
+              const saveResult = await window.electronAPI.saveOnEvent();
+              if (saveResult && saveResult.success) {
+                console.log(`[渲染进程] 切换文件前保存成功: ${saveResult.filePath}`);
+              } else if (saveResult) {
+                console.error(`[渲染进程] 切换文件前保存失败: ${saveResult.error}`);
+              }
+            } catch (error) {
+              console.error('[渲染进程] 切换文件前保存时发生错误:', error);
+            }
+          }
+          
+          // 打开新文件
+          console.log(`[渲染进程] 准备打开文件: ${file.path}`);
           await openFile(file.path);
         });
         

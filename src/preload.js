@@ -40,8 +40,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 新增: 图片上传处理
   selectImage: () => ipcRenderer.invoke('select-image'),
   
-  // 新增: 自动保存
+  // 内容跟踪 - 不会触发自动保存
   contentChanged: (content) => ipcRenderer.send('content-changed', content),
+  
+  // 新增: 按回车或切换文件时保存
+  saveOnEvent: () => ipcRenderer.invoke('save-on-event'),
 
   // 清除所有监听器
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),

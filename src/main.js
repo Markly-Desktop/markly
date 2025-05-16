@@ -634,22 +634,35 @@ app.whenReady().then(() => {
     }
   });
 
-  // 自动保存
+  // 跟踪内容变化但不再自动保存
   ipcMain.on('content-changed', (_, content) => {
+    // 只记录当前内容，不使用计时器自动保存
     currentContent = content;
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
+  });
+  
+  // 保存文件（当按回车键或切换文件时触发）
+  ipcMain.handle('save-on-event', async () => {
+    console.log(`[保存文件] 收到按回车或切换文件保存请求`);
+    
+    if (!currentFilePath || !currentContent) {
+      console.log(`[保存文件] 没有文件路径或内容，跳过保存`);
+      return { success: false, error: '没有可保存的文件或内容' };
     }
-    autoSaveTimer = setTimeout(async () => {
-      if (currentFilePath) {
-        try {
-          await fs.writeFile(currentFilePath, currentContent, 'utf8');
-          store.set('lastOpenedFile', currentFilePath); // 保存最近打开的文件路径
-        } catch (error) {
-          console.error('自动保存失败:', error.message);
-        }
-      }
-    }, 5000); // 5秒后自动保存
+    
+    try {
+      console.log(`[保存文件] 正在保存文件: ${currentFilePath}`);
+      await fs.writeFile(currentFilePath, currentContent, 'utf8');
+      store.set('lastOpenedFile', currentFilePath); // 保存最近打开的文件路径
+      
+      // 更新文件历史记录
+      updateFileHistory(currentFilePath);
+      
+      console.log(`[保存文件] 文件保存成功: ${currentFilePath}`);
+      return { success: true, filePath: currentFilePath };
+    } catch (error) {
+      console.error(`[保存文件] 保存文件失败:`, error.message);
+      return { success: false, error: error.message };
+    }
   });
 
   // 重命名文件
