@@ -113,34 +113,109 @@ const updateFileHistory = (filePath) => {
 
 // 从文件历史中打开最近的文件
 const openRecentFile = async () => {
-  // 过滤掉当前文件和不存在的文件
-  let availableFiles = recentFilesHistory.filter(file => {
-    return file !== currentFilePath && fs.existsSync(file);
-  });
+  console.log(`[openRecentFile] 开始执行`);
+  console.log(`[openRecentFile] 当前文件路径: ${currentFilePath}`);
+  console.log(`[openRecentFile] 历史记录: ${JSON.stringify(recentFilesHistory)}`);
   
-  if (availableFiles.length > 0) {
-    try {
-      const filePath = availableFiles[0]; // 获取最近的文件
-      const content = await fs.readFile(filePath, 'utf8');
+  try {
+    // 检查目录中是否有任何文件
+    const rootDirectory = store.get('rootDirectory');
+    console.log(`[openRecentFile] 根目录: ${rootDirectory}`);
+    
+    // 读取目录中的所有文件
+    let allFiles = [];
+    if (rootDirectory) {
+      try {
+        allFiles = await fs.readdir(rootDirectory);
+        console.log(`[openRecentFile] 目录中的文件数量: ${allFiles.length}`);
+        if (allFiles.length > 0) {
+          console.log(`[openRecentFile] 目录中的第一个文件: ${allFiles[0]}`);
+        }
+      } catch (readDirError) {
+        console.error(`[openRecentFile] 读取目录失败:`, readDirError.message);
+        allFiles = [];
+      }
+    }
+    
+    // 取出所有markdown文件
+    const markdownFiles = allFiles.filter(file => {
+      return file.toLowerCase().endsWith('.md') || file.toLowerCase().endsWith('.markdown');
+    });
+    console.log(`[openRecentFile] Markdown文件数量: ${markdownFiles.length}`);
+    if (markdownFiles.length > 0) {
+      console.log(`[openRecentFile] 第一个 Markdown 文件: ${markdownFiles[0]}`);
+    }
+    
+    // 筛选出有效的最近文件
+    console.log(`[openRecentFile] 开始查找可用的最近文件`);
+    let availableFiles = [];
+    for (const file of recentFilesHistory) {
+      const exists = await fs.pathExists(file);
+      console.log(`[openRecentFile] 检查文件 ${file} 存在: ${exists}`);
+      if (file !== currentFilePath && exists) {
+        availableFiles.push(file);
+      }
+    }
+    console.log(`[openRecentFile] 可用的最近文件数量: ${availableFiles.length}`);
+    
+    if (availableFiles.length > 0) {
+      // 有最近的文件，打开它
+      console.log(`[openRecentFile] 存在可用的最近文件`);
+      const filePath = availableFiles[0];
+      console.log(`[openRecentFile] 将打开的最近文件: ${filePath}`);
       
-      // 注意: 我们使用专门的事件来处理删除后打开文件的情况
-      // 避免触发普通的file-opened事件，因为这会导致文件列表重复刷新
-      mainWindow.webContents.send('open-recent-after-delete', { content, filePath });
+      // 读取文件内容
+      let content = '';
+      try {
+        content = await fs.readFile(filePath, 'utf8');
+        console.log(`[openRecentFile] 成功读取文件内容，长度: ${content.length}`);
+      } catch (readError) {
+        console.error(`[openRecentFile] 读取文件内容失败:`, readError.message);
+        return false;
+      }
+      
+      // 这里使用标准的file-opened事件，因为它处理得更好
+      console.log(`[openRecentFile] 发送file-opened事件到渲染进程`);
+      mainWindow.webContents.send('file-opened', { content, filePath });
       
       // 更新主进程的状态
       currentFilePath = filePath;
       mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
       store.set('lastOpenedFile', filePath);
-      console.log(`已自动打开最近文件: ${filePath}`);
+      
+      console.log(`[openRecentFile] 成功打开最近文件: ${filePath}`);
       return true;
-    } catch (error) {
-      console.error('打开最近文件失败:', error.message);
+    } else if (markdownFiles.length > 0) {
+      // 没有最近的文件，但目录中有其他文件，返回空内容并保持编辑器可见
+      console.log(`[openRecentFile] 没有最近文件，但目录中有其他文件，发送file-new事件`);
+      mainWindow.webContents.send('file-new');
+      
+      // 重置主进程状态
+      currentFilePath = null;
+      mainWindow.setTitle(`Markly - 未命名`);
+      store.delete('lastOpenedFile');
+      
+      console.log('[openRecentFile] 目录中有文件，保持编辑器可见');
+      return false;
+    } else {
+      // 目录中没有文件，显示创建文件提示
+      console.log(`[openRecentFile] 目录中没有文件，发送show-no-files-message事件`);
+      // 使用特殊事件通知渲染进程显示“请先创建文件”提示
+      mainWindow.webContents.send('show-no-files-message');
+      
+      // 重置主进程状态
+      currentFilePath = null;
+      mainWindow.setTitle(`Markly - 未命名`);
+      store.delete('lastOpenedFile');
+      
+      console.log('[openRecentFile] 目录中没有文件，显示创建文件提示');
       return false;
     }
-  } else {
-    console.log('没有可用的最近文件');
+  } catch (error) {
+    console.error(`[openRecentFile] 执行出错:`, error.message);
+    console.error(error.stack);
+    return false;
   }
-  return false;
 };
 
 const createWindow = () => {
@@ -480,8 +555,26 @@ app.whenReady().then(() => {
 
   // 打开指定文件
   ipcMain.handle('open-file', async (_, { filePath }) => {
+    console.log(`[打开文件] 收到请求: ${filePath}`);
+    
     try {
+      // 检查文件存在
+      const exists = await fs.pathExists(filePath);
+      if (!exists) {
+        console.error(`[打开文件] 文件不存在: ${filePath}`);
+        return { success: false, error: '文件不存在' };
+      }
+      
+      // 读取文件内容
+      console.log(`[打开文件] 读取文件内容`);
       const content = await fs.readFile(filePath, 'utf8');
+      console.log(`[打开文件] 成功读取内容，长度: ${content.length}`);
+      
+      // 直接发送事件到渲染进程
+      console.log(`[打开文件] 发送file-opened事件到渲染进程`);
+      mainWindow.webContents.send('file-opened', { content, filePath });
+      
+      // 更新主进程状态
       currentFilePath = filePath;
       mainWindow.setTitle(`Markly - ${path.basename(filePath)}`);
       store.set('lastOpenedFile', filePath); // 保存最近打开的文件路径
@@ -489,10 +582,10 @@ app.whenReady().then(() => {
       // 将文件添加到最近打开历史记录
       updateFileHistory(filePath);
       
-      console.log(`打开文件: ${filePath}`);
+      console.log(`[打开文件] 成功打开文件: ${filePath}`);
       return { success: true, content, filePath };
     } catch (error) {
-      console.error(`打开文件失败 ${filePath}:`, error.message);
+      console.error(`[打开文件] 打开文件失败 ${filePath}:`, error.message);
       return { success: false, error: error.message };
     }
   });
@@ -601,6 +694,10 @@ app.whenReady().then(() => {
 
   // 删除文件
   ipcMain.handle('delete-file', async (_, { filePath }) => {
+    console.log(`[删除文件] 开始处理删除请求: ${filePath}`);
+    console.log(`[删除文件] 当前打开的文件: ${currentFilePath}`);
+    console.log(`[删除文件] 历史记录: ${JSON.stringify(recentFilesHistory)}`);
+    
     try {
       // 确认删除
       const { response } = await dialog.showMessageBox({
@@ -614,22 +711,31 @@ app.whenReady().then(() => {
       
       // 如果用户取消，返回
       if (response === 0) {
+        console.log(`[删除文件] 用户取消删除`);
         return { success: false, canceled: true };
       }
+      
+      console.log(`[删除文件] 确认删除: ${filePath}`);
+      console.log(`[删除文件] 是否为当前文件: ${currentFilePath === filePath}`);
       
       // 如果删除的是当前打开的文件，需要先关闭文件并准备打开最近文件
       let shouldOpenRecent = false;
       if (currentFilePath === filePath) {
+        console.log(`[删除文件] 将要删除当前打开的文件`);
+        
         // 更新历史记录，从历史中移除要删除的文件
         recentFilesHistory = recentFilesHistory.filter(path => path !== filePath);
         store.set('recentFilesHistory', recentFilesHistory);
+        console.log(`[删除文件] 更新后的历史记录: ${JSON.stringify(recentFilesHistory)}`);
         
         // 暂时重置全局状态，但不发送 file-new 事件
         // 我们在删除成功后会直接打开最近文件
         currentFilePath = null;
+        console.log(`[删除文件] 重置当前文件路径为 null`);
         
         // 标记应该打开最近文件
         shouldOpenRecent = true;
+        console.log(`[删除文件] 设置 shouldOpenRecent = true`);
         
         // 等待一下以便引用归集
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -637,29 +743,43 @@ app.whenReady().then(() => {
       
       try {
         // 尝试删除文件
+        console.log(`[删除文件] 准备调用fs.unlink删除文件: ${filePath}`);
         await fs.unlink(filePath);
-        console.log(`成功删除文件: ${filePath}`);
+        console.log(`[删除文件] 成功删除文件: ${filePath}`);
         
         // 如果标记了需要打开最近文件，尝试打开
-        const result = shouldOpenRecent ? await openRecentFile() : false;
+        console.log(`[删除文件] shouldOpenRecent = ${shouldOpenRecent}`);
         if (shouldOpenRecent) {
-          console.log(result ? '成功打开最近文件' : '没有可用的最近文件');
+          console.log(`[删除文件] 准备调用openRecentFile打开最近文件`);
+          const result = await openRecentFile();
+          console.log(`[删除文件] openRecentFile返回值: ${result}`);
+          console.log(`[删除文件] ${result ? '成功打开最近文件' : '没有打开最近文件'}`);
+        } else {
+          console.log(`[删除文件] 不需要打开最近文件`);
         }
         
+        console.log(`[删除文件] 控制流返回成功`);
         return { success: true };
       } catch (unlinkError) {
-        console.error('删除文件失败:', unlinkError.message);
+        console.error(`[删除文件] 删除文件失败:`, unlinkError.message);
         // 如果删除失败，尝试强制清理缓存并再次尝试
         if (process.platform === 'win32') {
           // Windows 上利用基于命令的删除
           try {
             require('child_process').execSync(`del "${filePath.replace(/"/g, '\"')}" /f`);
-            console.log(`成功使用命令强制删除文件: ${filePath}`);
+            console.log(`[强制删除Windows] 成功使用命令强制删除文件: ${filePath}`);
             
-            // 如果标记了需要打开最近文件，尝试打开
-            const result = shouldOpenRecent ? await openRecentFile() : false;
+            // 如果当前删除的文件是打开的文件，重置当前文件路径
+            if (currentFilePath === filePath) {
+              console.log(`[强制删除Windows] 重置当前文件路径，因为当前删除的文件就是打开的文件`);
+              currentFilePath = null;
+            }
+            
+            // 尝试打开最近文件
             if (shouldOpenRecent) {
-              console.log(result ? '成功打开最近文件' : '没有可用的最近文件');
+              console.log(`[强制删除Windows] 准备打开最近文件`);
+              const result = await openRecentFile();
+              console.log(`[强制删除Windows] 打开最近文件结果: ${result ? '成功' : '失败'}`);
             }
             
             return { success: true };
@@ -671,12 +791,19 @@ app.whenReady().then(() => {
           // 在非 Windows 平台上强制删除
           try {
             require('child_process').execSync(`rm -f "${filePath.replace(/"/g, '\"')}"`);
-            console.log(`成功使用命令强制删除文件: ${filePath}`);
+            console.log(`[强制删除Unix] 成功使用命令强制删除文件: ${filePath}`);
             
-            // 如果标记了需要打开最近文件，尝试打开
-            const result = shouldOpenRecent ? await openRecentFile() : false;
+            // 如果当前删除的文件是打开的文件，重置当前文件路径
+            if (currentFilePath === filePath) {
+              console.log(`[强制删除Unix] 重置当前文件路径，因为当前删除的文件就是打开的文件`);
+              currentFilePath = null;
+            }
+            
+            // 尝试打开最近文件
             if (shouldOpenRecent) {
-              console.log(result ? '成功打开最近文件' : '没有可用的最近文件');
+              console.log(`[强制删除Unix] 准备打开最近文件`);
+              const result = await openRecentFile();
+              console.log(`[强制删除Unix] 打开最近文件结果: ${result ? '成功' : '失败'}`);
             }
             
             return { success: true };

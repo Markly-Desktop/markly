@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 文件删除后打开最近文件事件
   onOpenRecentAfterDelete: (callback) => ipcRenderer.on('open-recent-after-delete', callback),
   
+  // 新增: 通知渲染进程显示“无文件”提示的事件
+  onShowNoFilesMessage: (callback) => ipcRenderer.on('show-no-files-message', callback),
+  
   // 新增: 图片上传处理
   selectImage: () => ipcRenderer.invoke('select-image'),
   

@@ -41,10 +41,78 @@ import { marked } from 'marked';
 let editor;
 let currentContent = '';
 let currentFilePath = null;
-let editorMode = 'edit'; // 'edit' 或 'preview'
+let isPreviewMode = false; // 默认为编辑模式
+let hasOpenedFiles = false; // 跟踪是否有文件打开
 let previewTimeout; // 用于防抖预览更新
 let settings = { // 用户设置
   rootDirectory: ''
+};
+
+// 切换“请先创建文件”提示和编辑器的显示状态
+const toggleNoFileMessage = (show) => {
+  console.log(`[渲染进程:toggleNoFileMessage] 开始执行，参数show=${show}`);
+  
+  const noFileMessage = document.getElementById('no-file-placeholder');
+  const editorContainer = document.getElementById('editor-container');
+  
+  if (!noFileMessage || !editorContainer) {
+    console.error(`[渲染进程:toggleNoFileMessage] 无法找到必要的DOM元素`);
+    return;
+  }
+  
+  // 检查当前状态
+  console.log(`[渲染进程:toggleNoFileMessage] 当前编辑器是否可见: ${!editorContainer.classList.contains('hidden')}`);
+  console.log(`[渲染进程:toggleNoFileMessage] 当前提示是否可见: ${!noFileMessage.classList.contains('hidden')}`);
+  
+  try {
+    if (show) {
+      // 显示提示，隐藏编辑器
+      console.log(`[渲染进程:toggleNoFileMessage] 显示“请先创建文件”提示，隐藏编辑器`);
+      noFileMessage.classList.remove('hidden');
+      editorContainer.classList.add('hidden');
+      hasOpenedFiles = false;
+      
+      // 强制重置一些 UI 状态
+      updateFilePath(null);
+      if (editor) {
+        try {
+          editor.commands.clearContent();
+          console.log(`[渲染进程:toggleNoFileMessage] 已清空编辑器内容`);
+        } catch (err) {
+          console.error(`[渲染进程:toggleNoFileMessage] 清空编辑器失败:`, err);
+        }
+      }
+    } else {
+      // 隐藏提示，显示编辑器
+      console.log(`[渲染进程:toggleNoFileMessage] 隐藏“请先创建文件”提示，显示编辑器`);
+      
+      // 先确保编辑器可见，再隐藏提示，这样避免空白屏闪现
+      editorContainer.classList.remove('hidden');
+      noFileMessage.classList.add('hidden');
+      hasOpenedFiles = true;
+      
+      // 触发编辑器重新渲染
+      if (editor) {
+        try {
+          // 触发小变化以确保编辑器内容完全渲染
+          editor.commands.focus();
+          console.log(`[渲染进程:toggleNoFileMessage] 已将焦点设置到编辑器`);
+        } catch (err) {
+          console.error(`[渲染进程:toggleNoFileMessage] 设置编辑器焦点失败:`, err);
+        }
+      }
+    }
+    
+    // 强制浏览器重新计算布局
+    setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+      console.log(`[渲染进程:toggleNoFileMessage] 已触发重新计算布局`);
+    }, 50);
+    
+    console.log(`[渲染进程:toggleNoFileMessage] 完成状态切换，现在 hasOpenedFiles=${hasOpenedFiles}`);
+  } catch (error) {
+    console.error(`[渲染进程:toggleNoFileMessage] 切换显示状态时发生错误:`, error);
+  }
 };
 
 // 初始化 Tiptap 编辑器
@@ -330,10 +398,17 @@ const createNewFile = async () => {
       // 清空编辑器内容
       editor.commands.clearContent();
       currentContent = '';
+      
       // 更新路径显示
       updateFilePath(result.filePath);
+      
+      // 创建文件后隐藏“请先创建文件”的提示，显示编辑器
+      toggleNoFileMessage(false);
+      
       // 刷新文件列表
       await loadFileList();
+      
+      console.log(`成功创建并打开文件: ${result.filePath}`);
     } else if (result && result.error) {
       alert(`创建文件失败: ${result.error}`);
     }
@@ -346,6 +421,21 @@ const createNewFile = async () => {
 // 加载文件列表
 // 防止并发调用的锁
 let isLoadingFileList = false;
+
+// 检查目录是否有文件
+// 返回值： true 表示目录中有文件，false 表示目录中没有文件
+const checkDirectoryHasFiles = async () => {
+  try {
+    const result = await window.electronAPI.listFiles();
+    // 目录是否有 Markdown 文件
+    const hasFiles = result && result.success && result.files && result.files.length > 0;
+    console.log(`目录${hasFiles ? '有' : '没有'}文件`);
+    return hasFiles;
+  } catch (error) {
+    console.error('检查目录是否有文件失败:', error);
+    return false;
+  }
+};
 
 const loadFileList = async () => {
   // 如果已经在加载列表，等待当前操作完成
@@ -632,6 +722,14 @@ const deleteFile = async (filePath) => {
       if (!isCurrentFile) {
         // 文件已被删除，刷新列表
         await loadFileList();
+        
+        // 刷新完文件列表后，检查是否有文件
+        const fileItems = document.querySelectorAll('.file-item');
+        if (fileItems.length === 0) {
+          // 如果没有文件，则显示“请先创建文件”的提示
+          toggleNoFileMessage(true);
+          updateFilePath(null); // 清空路径显示
+        }
       }
     } else if (!result.canceled) {
       // 非用户取消的错误
@@ -692,29 +790,107 @@ const bindIpcEvents = () => {
     createNewFile();
   });
   
-  // 监听删除文件后打开最近文件的事件
+  // 监听“无文件”提示事件 - 实现简单直接
+  window.electronAPI.onShowNoFilesMessage(() => {
+    console.log('[渲染进程] 收到 show-no-files-message 事件');
+    // 显示“请先创建文件”的提示
+    toggleNoFileMessage(true);
+    // 清空路径显示
+    updateFilePath(null);
+    // 清空编辑器内容
+    if (editor) {
+      editor.commands.clearContent();
+      currentContent = '';
+    }
+    console.log('[渲染进程] 已显示“请先创建文件”提示');
+  });
+  
+  // 这个事件处理器已不再使用，但保留以避免错误
   window.electronAPI.onOpenRecentAfterDelete(async (_, { content, filePath }) => {
-    // 更新编辑器内容
-    editor.commands.setContent(content);
-    currentContent = content;
-    
-    // 更新路径显示
-    updateFilePath(filePath);
-    
-    // 刷新文件列表
-    await loadFileList();
+    console.log('[渲染进程] 收到 onOpenRecentAfterDelete 事件，但该事件已过期');
   });
   
   // 文件被打开
   window.electronAPI.onFileOpened((event, { content, filePath }) => {
-    // 将 Markdown 转为 HTML
-    const html = marked.parse(content);
-    editor.commands.setContent(html);
-    currentContent = html;
-    updateFilePath(filePath);
-    updateWordCount(html);
-    // 刷新文件列表以突出显示当前文件
-    loadFileList();
+    console.log(`[渲染进程:onFileOpened] 收到 file-opened 事件, 文件路径: ${filePath}`);
+    console.log(`[渲染进程:onFileOpened] 文件内容长度: ${content ? content.length : 0}`);
+    
+    try {
+      // 首先确保编辑器容器可见
+      const editorContainer = document.getElementById('editor-container');
+      const noFileMessage = document.getElementById('no-file-placeholder');
+      
+      if (editorContainer && noFileMessage) {
+        console.log(`[渲染进程:onFileOpened] 强制设置编辑器可见状态`);
+        editorContainer.classList.remove('hidden');
+        noFileMessage.classList.add('hidden');
+      }
+      
+      // 将 Markdown 转为 HTML
+      console.log(`[渲染进程:onFileOpened] 开始转换文件内容`);
+      const html = marked.parse(content);
+      console.log(`[渲染进程:onFileOpened] 文件内容转换为HTML完成`);
+      
+      // 更新状态
+      currentContent = html;
+      hasOpenedFiles = true;
+      updateFilePath(filePath);
+      
+      // 检查编辑器状态并设置内容
+      if (!editor) {
+        console.error(`[渲染进程:onFileOpened] 编辑器实例不存在！`);
+        initializeEditor(); // 如果编辑器不存在，尝试初始化
+      }
+      
+      // 设置编辑器内容
+      try {
+        console.log(`[渲染进程:onFileOpened] 设置编辑器内容`);
+        editor.commands.setContent(html);
+        console.log(`[渲染进程:onFileOpened] 编辑器内容设置完成`);
+      } catch (editorError) {
+        console.error(`[渲染进程:onFileOpened] 设置编辑器内容失败:`, editorError);
+        // 尝试重新初始化编辑器
+        try {
+          console.log(`[渲染进程:onFileOpened] 尝试重新初始化编辑器`);
+          initializeEditor();
+          // 等待一下再次尝试设置内容
+          setTimeout(() => {
+            editor.commands.setContent(html);
+            console.log(`[渲染进程:onFileOpened] 重新初始化后设置内容成功`);
+          }, 100);
+        } catch (reinitError) {
+          console.error(`[渲染进程:onFileOpened] 重新初始化失败:`, reinitError);
+        }
+      }
+      
+      // 更新字数
+      updateWordCount(html);
+      
+      // 隐藏“请先创建文件”的提示
+      console.log(`[渲染进程:onFileOpened] 调用toggleNoFileMessage隐藏提示`);
+      toggleNoFileMessage(false);
+      
+      // 强制让编辑器获得焦点
+      setTimeout(() => {
+        try {
+          editor.commands.focus();
+          console.log(`[渲染进程:onFileOpened] 设置编辑器焦点成功`);
+        } catch (focusError) {
+          console.error(`[渲染进程:onFileOpened] 设置编辑器焦点失败:`, focusError);
+        }
+        
+        // 刷新文件列表以突出显示当前文件
+        console.log(`[渲染进程:onFileOpened] 刷新文件列表`);
+        loadFileList();
+      }, 100);
+      
+      // 强制触发重新渲染
+      window.dispatchEvent(new Event('resize'));
+      
+      console.log(`[渲染进程:onFileOpened] file-opened 事件处理完成`);
+    } catch (error) {
+      console.error(`[渲染进程:onFileOpened] 处理file-opened事件失败:`, error);
+    }
   });
   
   // 保存文件
@@ -776,7 +952,7 @@ const init = async () => {
   await loadSettings();
   
   // 给窗口一点时间加载并建立IPC通道
-  setTimeout(() => {
+  setTimeout(async () => { // 添加async关键字使得回调函数可以使用await
     // 初始化时检查全屏状态
     updateMacSafeArea();
     
@@ -784,9 +960,26 @@ const init = async () => {
     // 延迟加载文件列表，避免和主进程发送的file-opened事件冲突
     // 因为如果主进程会发送file-opened事件，该事件的处理程序中会调用loadFileList
     if (!currentFilePath) {
-      loadFileList();
+      // 加载文件列表
+      await loadFileList();
+      
+      // 检查目录中是否有文件
+      const hasFiles = await checkDirectoryHasFiles();
+      
+      // 只有在目录中没有文件时才显示“请先创建文件”的提示
+      toggleNoFileMessage(!hasFiles);
+      
+      if (!hasFiles) {
+        console.log('目录中没有文件，显示创建文件提示');
+      }
     }
   }, 300);
+  
+  // 为创建新文件按钮绑定事件
+  const btnCreateFile = document.getElementById('btn-create-file');
+  if (btnCreateFile) {
+    btnCreateFile.addEventListener('click', createNewFile);
+  }
   
   // 监听全屏状态变化
   if (window.electronAPI && typeof window.electronAPI.onFullScreenChange === 'function') {
