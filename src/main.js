@@ -54,17 +54,7 @@ function startImageServer() {
       index: false,
       setHeaders: (res, path, stat) => {
         console.log(`提供文件: ${path}`);
-        // 根据文件类型设置正确的MIME类型
-        const ext = path.toLowerCase();
-        if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) {
-          res.set('Content-Type', 'image/jpeg');
-        } else if (ext.endsWith('.png')) {
-          res.set('Content-Type', 'image/png');
-        } else if (ext.endsWith('.gif')) {
-          res.set('Content-Type', 'image/gif');
-        } else if (ext.endsWith('.webp')) {
-          res.set('Content-Type', 'image/webp');
-        }
+        // Express 会自动处理 Content-Type
       }
     })(req, res, next);
   });
