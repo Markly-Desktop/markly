@@ -1,12 +1,87 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, protocol } = require('electron');
 const path = require('node:path');
 const fs = require('fs-extra');
 // 导入 electron-store，尝试使用 default 属性
 const ElectronStore = require('electron-store');
 const Store = ElectronStore.default || ElectronStore;
+const crypto = require('crypto');
+const url = require('url');
+const express = require('express');
+const http = require('http');
 
 // 初始化设置存储
 const store = new Store();
+
+// 本地图片服务器端口
+const imageServerPort = 17395;
+
+// 图片服务器实例
+let imageServer = null;
+
+// 创建并启动本地图片服务器
+function startImageServer() {
+  const app = express();
+  
+  // 设置跨域访问
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    next();
+  });
+  
+  // 动态设置静态文件服务器路径
+  app.use('/images', (req, res, next) => {
+    // 验证文档是否打开
+    if (!currentFilePath) {
+      console.log('错误: 没有打开文档');
+      return res.status(404).send('Document not opened');
+    }
+
+    const docDir = path.dirname(currentFilePath);
+    const imagesDir = path.join(docDir, '.images');
+    
+    // 记录访问情况
+    console.log(`请求图片目录: ${imagesDir}`);
+    console.log(`原始 URL: ${req.originalUrl}`);
+    
+    // 确保图片目录存在
+    if (!fs.existsSync(imagesDir)) {
+      console.log(`创建图片目录: ${imagesDir}`);
+      fs.ensureDirSync(imagesDir);
+    }
+
+    // 每次请求都为当前打开的文档设置静态目录
+    express.static(imagesDir, {
+      index: false,
+      setHeaders: (res, path, stat) => {
+        console.log(`提供文件: ${path}`);
+        // 根据文件类型设置正确的MIME类型
+        const ext = path.toLowerCase();
+        if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) {
+          res.set('Content-Type', 'image/jpeg');
+        } else if (ext.endsWith('.png')) {
+          res.set('Content-Type', 'image/png');
+        } else if (ext.endsWith('.gif')) {
+          res.set('Content-Type', 'image/gif');
+        } else if (ext.endsWith('.webp')) {
+          res.set('Content-Type', 'image/webp');
+        }
+      }
+    })(req, res, next);
+  });
+  
+  // 创建 HTTP 服务器
+  imageServer = http.createServer(app);
+  
+  // 监听指定端口
+  imageServer.listen(imageServerPort, () => {
+    console.log(`本地图片服务器启动在端口: ${imageServerPort}`);
+  });
+  
+  // 错误处理
+  imageServer.on('error', (err) => {
+    console.error('图片服务器错误:', err);
+  });
+}
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -22,6 +97,11 @@ let autoSaveTimer = null;
 // 当前编辑的内容
 let currentContent = '';
 
+// 生成随机字符串作为文件名
+const generateRandomFileName = (extension) => {
+  return `${crypto.randomBytes(8).toString('hex')}${extension}`;
+};
+
 const createWindow = () => {
   // Create the browser window.
   mainWindow = new BrowserWindow({
@@ -31,6 +111,7 @@ const createWindow = () => {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: false // 允许加载本地文件（仅在开发环境使用）
     },
     titleBarStyle: 'hiddenInset', // 在macOS上创建更好看的标题栏
     backgroundColor: '#FFF',
@@ -45,6 +126,16 @@ const createWindow = () => {
     mainWindow.webContents.send('fullscreen-change', false);
   });
 
+  // 设置 CSP 来允许从本地HTTP服务器加载资源
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [`default-src 'self' data: file: http://localhost:*; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: http://localhost:*`]
+      }
+    })
+  });
+  
   // and load the index.html of the app.
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
@@ -217,6 +308,9 @@ const createWindow = () => {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  // 启动图片HTTP服务器
+  startImageServer();
+  
   createWindow();
 
   // 处理文件保存的请求
@@ -470,6 +564,61 @@ app.whenReady().then(() => {
       return { success: false, error: error.message };
     }
   });
+
+  // 处理图片选择和处理请求
+  ipcMain.handle('select-image', async () => {
+    // 需要确认有当前编辑的文档
+    if (!currentFilePath) {
+      return { success: false, error: '请先保存文档，然后再插入图片。' };
+    }
+
+    // 显示文件选择对话框
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [
+        { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }
+      ]
+    });
+
+    if (!canceled && filePaths.length > 0) {
+      try {
+        const imagePath = filePaths[0];
+        const imageExtension = path.extname(imagePath);
+        
+        // 获取文档所在的目录
+        const docDir = path.dirname(currentFilePath);
+        
+        // 创建 .images 目录（如果不存在）
+        const imagesDir = path.join(docDir, '.images');
+        await fs.ensureDir(imagesDir);
+        
+        // 生成随机文件名
+        const newFileName = generateRandomFileName(imageExtension);
+        const newFilePath = path.join(imagesDir, newFileName);
+        
+        // 复制图片到 .images 目录
+        await fs.copy(imagePath, newFilePath);
+        
+        // 创建相对于文档的路径用于Markdown
+        const relativePath = `.images/${newFileName}`;
+        
+        // 利用HTTP服务器URL用于编辑器预览显示
+        const httpServerUrl = `http://localhost:${imageServerPort}/images/${newFileName}`;
+        
+        return { 
+          success: true, 
+          imagePath: relativePath,  // 用于Markdown源码
+          fileUrl: httpServerUrl  // 用于编辑器和预览
+        };
+      } catch (error) {
+        return { success: false, error: error.message };
+      }
+    }
+
+    return { success: false };
+  });
+
+  // 协议注册代码已移至 app.whenReady() 函数中
 
   // On OS X it's common to re-create a window in the app when the
   app.on('activate', () => {

@@ -2,21 +2,27 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: file: http://localhost:*; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: http://localhost:*" />
     <title>Markly - Markdown 编辑器</title>
+    <style>
+      /* 确保页面内容不会超出屏幕高度导致整体滚动 */
+      html, body {
+        overflow: hidden;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+    </style>
   </head>
   <body class="bg-gray-50 dark:bg-gray-900">
-    <div id="app" class="flex flex-col h-screen">
-      <!-- 顶部安全区域，避免与macOS窗口控制按钮重叠，仅在非全屏模式下显示 -->
-      <div id="mac-safe-area" class="mac-safe-area h-6 flex">
-        <div class="w-64 bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700"></div>
-        <div class="flex-grow bg-white dark:bg-gray-800"></div>
-      </div>
-      
+    <div id="app" class="flex flex-col h-screen">      
       <!-- 主工作区域 -->
-      <div class="flex-grow flex">
-        <!-- 左侧文件列表 -->
-        <div id="file-list" class="w-64 border-r border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 overflow-auto flex flex-col">
+      <div class="flex-grow flex overflow-hidden">
+        <!-- 左侧文件列表 - 添加overflow-y-auto确保只有垂直方向滚动 -->
+        <div id="file-list" class="w-64 border-r border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 overflow-y-auto flex flex-col">
+          <!-- 左侧安全区域 -->
+          <div class="mac-safe-area h-6 bg-gray-100 dark:bg-gray-800"></div>
+          
           <div class="p-3 border-b border-gray-200 dark:border-gray-700">
             <div class="flex items-center justify-between">
               <h3 class="text-sm font-medium">Markly</h3>
@@ -63,10 +69,13 @@
           </div>
         </div>
         
-        <!-- 右侧内容区域 -->
-        <div class="flex-grow flex flex-col">
+        <!-- 右侧内容区域 - 添加overflow-hidden确保子容器控制滚动 -->
+        <div class="flex-grow flex flex-col overflow-hidden">
+          <!-- 右侧安全区域 -->
+          <div class="mac-safe-area h-6 bg-white dark:bg-gray-800"></div>
+          
           <!-- 编辑器区域 -->
-          <div id="editor-container" class="flex-grow flex flex-col">
+          <div id="editor-container" class="flex-grow flex flex-col overflow-hidden">
             <!-- 工具栏移至编辑器内部 -->
             <div class="toolbar flex items-center p-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
               <div class="format-buttons flex space-x-1">
@@ -144,8 +153,8 @@
               </div>
             </div>
             
-            <!-- 编辑器 -->
-            <div id="editor" class="tiptap-editor flex-grow"></div>
+            <!-- 编辑器 - 添加overflow-auto确保内容超出时可滚动 -->
+            <div id="editor" class="tiptap-editor flex-grow overflow-auto"></div>
           </div>
           
           <!-- 预览容器 (默认隐藏) -->

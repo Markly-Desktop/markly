@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renameFile: (oldPath, newName) => ipcRenderer.invoke('rename-file', { oldPath, newName }),
   deleteFile: (filePath) => ipcRenderer.invoke('delete-file', { filePath }),
   
+  // 新增: 图片上传处理
+  selectImage: () => ipcRenderer.invoke('select-image'),
+  
   // 新增: 自动保存
   contentChanged: (content) => ipcRenderer.send('content-changed', content),
 

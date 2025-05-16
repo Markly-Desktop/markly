@@ -137,7 +137,26 @@ const htmlToMarkdown = (html) => {
   markdown = markdown.replace(/<strong>(.*?)<\/strong>/g, '**$1**');
   markdown = markdown.replace(/<em>(.*?)<\/em>/g, '*$1*');
   markdown = markdown.replace(/<a href="(.*?)".*?>(.*?)<\/a>/g, '[$2]($1)');
-  markdown = markdown.replace(/<img.*?src="(.*?)".*?>/g, '![]($1)');
+  
+  // 特殊处理图片标签，始终使用data-md-src属性作为Markdown中的图片源
+  markdown = markdown.replace(/<img([^>]*?)>/g, function(match) {
+    // 从img标签中提取data-md-src属性（如果有）
+    const mdSrcMatch = match.match(/data-md-src="([^"]*?)"/);
+    if (mdSrcMatch) {
+      // 如果找到data-md-src属性，使用它作为Markdown图片路径
+      return `![](${mdSrcMatch[1]})`;
+    }
+    
+    // 如果没有data-md-src，回退到src属性
+    const srcMatch = match.match(/src="([^"]*?)"/);
+    if (srcMatch) {
+      return `![](${srcMatch[1]})`;
+    }
+    
+    // 如果既没有data-md-src也没有src，返回空图片标记
+    return '![]()';
+  });
+  
   markdown = markdown.replace(/<blockquote>(.*?)<\/blockquote>/g, '> $1\n\n');
   markdown = markdown.replace(/<pre><code>(.*?)<\/code><\/pre>/g, '```\n$1\n```\n\n');
   markdown = markdown.replace(/<code>(.*?)<\/code>/g, '`$1`');
@@ -238,10 +257,30 @@ const bindToolbarEvents = () => {
     }
   });
   
-  document.getElementById('btn-image').addEventListener('click', () => {
-    const url = prompt('输入图片地址:');
-    if (url) {
-      editor.chain().focus().setImage({ src: url }).run();
+  document.getElementById('btn-image').addEventListener('click', async () => {
+    try {
+      // 调用新增的图片选择功能
+      const result = await window.electronAPI.selectImage();
+      if (result && result.success) {
+        // 使用 fileUrl 来显示图片（用于编辑器中的显示），但保存 imagePath 相对路径（用于Markdown）
+        if (result.fileUrl) {
+          // 使用 fileUrl 来避免 404 错误
+          editor.chain().focus().setImage({ src: result.fileUrl, 'data-md-src': result.imagePath }).run();
+        } else {
+          // 回退到使用相对路径
+          editor.chain().focus().setImage({ src: result.imagePath }).run();
+        }
+      } else if (result && result.error) {
+        // 如果有错误（例如还没有保存文档），显示提示
+        alert(result.error);
+      }
+    } catch (error) {
+      console.error('图片上传失败:', error);
+      // 失败时回退到原来的URL输入方式
+      const url = prompt('输入图片地址:');
+      if (url) {
+        editor.chain().focus().setImage({ src: url }).run();
+      }
     }
   });
   
