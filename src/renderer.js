@@ -442,6 +442,8 @@ const createNewFile = async () => {
 // 加载文件列表
 // 防止并发调用的锁
 let isLoadingFileList = false;
+// 上次文件列表数据，用于优化渲染
+let lastFileListData = null;
 
 // 检查目录是否有文件
 // 返回值： true 表示目录中有文件，false 表示目录中没有文件
@@ -469,19 +471,18 @@ const loadFileList = async () => {
     isLoadingFileList = true;
     console.log('开始加载文件列表');
     
+    // 先获取文件列表数据，再更新UI，减少闪烁
+    const result = await window.electronAPI.listFiles();
+    
+    // 获取文件列表容器
     const fileItems = document.querySelector('.file-items');
     
-    // 清空现有文件列表
-    while (fileItems.firstChild) {
-      fileItems.removeChild(fileItems.firstChild);
-    }
-    
-    const result = await window.electronAPI.listFiles();
     if (result && result.success && result.files) {
       // 创建一个 Set 来跟踪已添加的文件路径，用于去重
       const addedFilePaths = new Set();
+      const filesList = [];
       
-      // 遍历文件并创建列表项
+      // 先处理文件数据，构建DOM元素，但不立即添加到文档中
       result.files.forEach(file => {
         // 如果文件路径已经添加过，则跳过
         if (addedFilePaths.has(file.path)) {
@@ -532,6 +533,9 @@ const loadFileList = async () => {
           // 打开新文件
           console.log(`[渲染进程] 准备打开文件: ${file.path}`);
           await openFile(file.path);
+          
+          // 在打开文件后刷新文件列表以确保状态最新
+          await loadFileList();
         });
         
         // 添加右键菜单事件
@@ -540,8 +544,21 @@ const loadFileList = async () => {
           showFileContextMenu(fileItem, file);
         });
         
-        fileItems.appendChild(fileItem);
+        filesList.push(fileItem);
       });
+      
+      // 缓存当前数据，减少不必要的DOM操作
+      lastFileListData = result.files;
+      
+      // 现在已经构建了所有DOM元素，开始一次性更新UI
+      // 使用文档片段暂存所有元素，这样只需一次DOM操作
+      const fragment = document.createDocumentFragment();
+      filesList.forEach(item => fragment.appendChild(item));
+      
+      // 确保清空容器后立即添加新内容，减少闪烁
+      fileItems.innerHTML = '';
+      fileItems.appendChild(fragment);
+      
     } else if (result && result.error) {
       // 显示设置根目录的提示
       fileItems.innerHTML = `
@@ -826,6 +843,8 @@ const openFile = async (filePath) => {
     // 如果要打开的文件就是当前文件，不做任何操作
     if (filePath === currentFilePath) {
       console.log(`[渲染进程:openFile] 要打开的文件就是当前已打开的文件，不重复操作`);
+      // 即使是同一个文件，也刷新文件列表以确保状态最新
+      await loadFileList();
       return;
     }
     
@@ -1008,8 +1027,8 @@ const bindIpcEvents = () => {
       
       // 刷新文件列表
       console.log(`[渲染进程:onFileOpened] STEP 7: 刷新文件列表`); 
-      setTimeout(() => {
-        loadFileList();
+      setTimeout(async () => {
+        await loadFileList();
         console.log(`[渲染进程:onFileOpened] 刷新文件列表完成`);
       }, 200); // 等待编辑器设置完成后再刷新文件列表
       
