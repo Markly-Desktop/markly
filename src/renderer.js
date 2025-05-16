@@ -36,14 +36,15 @@ import Link from '@tiptap/extension-link';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import { marked } from 'marked';
+import { Markdown } from 'tiptap-markdown';
 
 // 全局变量
 let editor;
-let currentContent = '';
 let currentFilePath = null;
 let isPreviewMode = false; // 默认为编辑模式
 let hasOpenedFiles = false; // 跟踪是否有文件打开
 let previewTimeout; // 用于防抖预览更新
+let autoSaveTimeout; // 用于自动保存的延时器
 let settings = { // 用户设置
   rootDirectory: ''
 };
@@ -115,6 +116,52 @@ const toggleNoFileMessage = (show) => {
   }
 };
 
+// 实现自动保存功能
+const autoSaveContent = async () => {
+  // 如果没有打开文件，则不执行保存
+  if (!currentFilePath || !editor) {
+    console.log('[渲染进程:autoSaveContent] 没有打开文件或编辑器不存在，跳过自动保存');
+    return;
+  }
+  
+  try {
+    // 获取当前 markdown 内容
+    const markdownContent = editor.storage.markdown.getMarkdown();
+    console.log(`[渲染进程:autoSaveContent] 尝试自动保存到: ${currentFilePath}`);
+    
+    // 调用主进程保存文件 - 使用正确的API
+    // 使用 saveCurrentFile 方法，因为我们已知道当前文件路径
+    const result = await window.electronAPI.saveCurrentFile(markdownContent);
+    
+    if (result && result.success) {
+      console.log(`[渲染进程:autoSaveContent] 自动保存成功: ${result.filePath}`);
+    } else if (result) {
+      console.error(`[渲染进程:autoSaveContent] 自动保存失败: ${result.error}`);
+    }
+  } catch (error) {
+    console.error('[渲染进程:autoSaveContent] 自动保存时发生错误:', error);
+  }
+};
+
+// 防抖自动保存功能
+const debouncedAutoSave = (immediate = false) => {
+  // 清除之前的定时器
+  if (autoSaveTimeout) {
+    clearTimeout(autoSaveTimeout);
+  }
+  
+  // 如果是立即保存，则直接执行
+  if (immediate) {
+    autoSaveContent();
+    return;
+  }
+  
+  // 否则启动新的定时器，500毫秒后自动保存
+  autoSaveTimeout = setTimeout(() => {
+    autoSaveContent();
+  }, 500); // 设置500毫秒的防抖时间
+};
+
 // 初始化 Tiptap 编辑器
 const initEditor = () => {
   editor = new Editor({
@@ -131,37 +178,26 @@ const initEditor = () => {
       Image,
       Placeholder.configure({
         placeholder: '开始输入...'
+      }),
+      // 添加 Markdown 扩展
+      Markdown.configure({
+        breaks: true,
+        tightLists: true
       })
     ],
     content: '',
     onUpdate: ({ editor }) => {
-      const content = editor.getHTML();
-      currentContent = content;
-      updateWordCount(content);
-      debouncedUpdatePreview(content); // 改为防抖更新预览
+      // 直接获取 markdown 内容
+      const markdownContent = editor.storage.markdown.getMarkdown();
+      
+      // 使用 Markdown 内容更新预览和字数统计
+      updateWordCount(markdownContent);
+      debouncedUpdatePreview(markdownContent);
 
-      // 只跟踪内容变化，不触发自动保存
-      if (window.electronAPI && typeof window.electronAPI.contentChanged === 'function') {
-        const markdownContent = htmlToMarkdown(content);
-        window.electronAPI.contentChanged(markdownContent);
-      }
-    }
-  });
-  
-  // 监听编辑器的按键事件，按回车时保存
-  document.getElementById('editor').addEventListener('keydown', async (event) => {
-    // 断言：如果是回车键（Enter），就保存文件
-    if (event.key === 'Enter' && currentFilePath) {
-      console.log('[渲染进程] 检测到回车键按下，触发保存');
-      try {
-        const result = await window.electronAPI.saveOnEvent();
-        if (result && result.success) {
-          console.log(`[渲染进程] 按回车保存成功: ${result.filePath}`);
-        } else if (result) {
-          console.error(`[渲染进程] 保存失败: ${result.error}`);
-        }
-      } catch (error) {
-        console.error('[渲染进程] 保存时发生错误:', error);
+      // 每次内容变化时触发自动保存
+      if (currentFilePath) {
+        console.log(`[渲染进程:onUpdate] 内容变化，触发自动保存防抖函数`);
+        debouncedAutoSave();
       }
     }
   });
@@ -194,78 +230,28 @@ const initEditor = () => {
 };
 
 // 防抖函数：延迟触发预览更新
-const debouncedUpdatePreview = (content) => {
+const debouncedUpdatePreview = (markdownContent) => {
   clearTimeout(previewTimeout);
-  previewTimeout = setTimeout(() => updatePreview(content), 200);
+  previewTimeout = setTimeout(() => updatePreview(markdownContent), 200);
 };
 
 // 更新预览，使用 requestAnimationFrame 平滑切换
-const updatePreview = (content) => {
+const updatePreview = (markdownContent) => {
   const previewContent = document.getElementById('preview-content');
   previewContent.style.opacity = '0';
   requestAnimationFrame(() => {
-    const markdownContent = htmlToMarkdown(content);
-    previewContent.innerHTML = marked.parse(markdownContent);
+    // 直接使用 markdown 内容来渲染
+    previewContent.innerHTML = markdownContent;
     previewContent.style.opacity = '1';
   });
 };
 
-// 简单的 HTML 转 Markdown 逻辑
-const htmlToMarkdown = (html) => {
-  // 实际应用中可以使用更完善的转换库
-  // 这里只是做了一个简单的示例
-  let markdown = html;
-  
-  // 替换标签
-  markdown = markdown.replace(/<h1>(.*?)<\/h1>/g, '# $1\n\n');
-  markdown = markdown.replace(/<h2>(.*?)<\/h2>/g, '## $1\n\n');
-  markdown = markdown.replace(/<h3>(.*?)<\/h3>/g, '### $1\n\n');
-  markdown = markdown.replace(/<strong>(.*?)<\/strong>/g, '**$1**');
-  markdown = markdown.replace(/<em>(.*?)<\/em>/g, '*$1*');
-  markdown = markdown.replace(/<a href="(.*?)".*?>(.*?)<\/a>/g, '[$2]($1)');
-  
-  // 特殊处理图片标签，始终使用data-md-src属性作为Markdown中的图片源
-  markdown = markdown.replace(/<img([^>]*?)>/g, function(match) {
-    // 从img标签中提取data-md-src属性（如果有）
-    const mdSrcMatch = match.match(/data-md-src="([^"]*?)"/);
-    if (mdSrcMatch) {
-      // 如果找到data-md-src属性，使用它作为Markdown图片路径
-      return `![](${mdSrcMatch[1]})`;
-    }
-    
-    // 如果没有data-md-src，回退到src属性
-    const srcMatch = match.match(/src="([^"]*?)"/);
-    if (srcMatch) {
-      return `![](${srcMatch[1]})`;
-    }
-    
-    // 如果既没有data-md-src也没有src，返回空图片标记
-    return '![]()';
-  });
-  
-  markdown = markdown.replace(/<blockquote>(.*?)<\/blockquote>/g, '> $1\n\n');
-  markdown = markdown.replace(/<pre><code>(.*?)<\/code><\/pre>/g, '```\n$1\n```\n\n');
-  markdown = markdown.replace(/<code>(.*?)<\/code>/g, '`$1`');
-  markdown = markdown.replace(/<ul>(.*?)<\/ul>/g, '$1\n');
-  markdown = markdown.replace(/<ol>(.*?)<\/ol>/g, '$1\n');
-  markdown = markdown.replace(/<li>(.*?)<\/li>/g, '- $1\n');
-  markdown = markdown.replace(/<p>(.*?)<\/p>/g, '$1\n\n');
-
-  // 移除剩余的 HTML 标签
-  markdown = markdown.replace(/<.*?>/g, '');
-  
-  // 处理多余的空行
-  markdown = markdown.replace(/\n{3,}/g, '\n\n');
-  
-  return markdown.trim();
-};
-
 // 更新字数统计
-const updateWordCount = (content) => {
+const updateWordCount = (markdownContent) => {
   const wordCountElement = document.getElementById('word-count');
-  const text = content.replace(/<[^>]*>?/g, '');
-  const words = text.trim().length;
-  const lines = text.split(/\n/).length;
+  // 直接使用 markdown 文本计算字数和行数
+  const words = markdownContent.trim().length;
+  const lines = markdownContent.split(/\n/).length;
   
   wordCountElement.textContent = `${words} 字 | ${lines} 行`;
 };
@@ -275,11 +261,14 @@ const toggleMode = () => {
   const editorContainer = document.getElementById('editor-container');
   const previewContainer = document.getElementById('preview-container');
   
+  // 获取当前编辑器内容
+  const markdownContent = editor ? editor.storage.markdown.getMarkdown() : '';
+  
   if (editorMode === 'edit') {
     editorMode = 'preview';
     editorContainer.classList.add('hidden');
     previewContainer.classList.remove('hidden');
-    updatePreview(currentContent);
+    updatePreview(markdownContent);
   } else {
     editorMode = 'edit';
     previewContainer.classList.add('hidden');
@@ -290,24 +279,39 @@ const toggleMode = () => {
 // 保存文件
 const saveFile = async (filePath) => {
   try {
-    const markdownContent = htmlToMarkdown(currentContent);
+    console.log(`[渲染进程:saveFile] 开始保存文件到: ${filePath || '使用对话框选择路径'}`);
+    
+    // 获取当前编辑器的 markdown 内容
+    if (!editor) {
+      console.error(`[渲染进程:saveFile] 编辑器实例不存在，无法获取内容`);
+      return false;
+    }
+    
+    const content = editor.storage.markdown.getMarkdown();
+    console.log(`[渲染进程:saveFile] 获取编辑器内容，长度: ${content.length}`);
+    
+    // 调用主进程保存文件 - 使用正确的API
+    let result;
     
     if (filePath) {
-      const result = await window.electronAPI.saveCurrentFile(markdownContent);
-      if (result.success) {
-        updateFilePath(result.filePath);
-        return true;
-      }
+      // 如果已有路径，使用saveCurrentFile并先设置currentFilePath
+      currentFilePath = filePath;
+      result = await window.electronAPI.saveCurrentFile(content);
     } else {
-      const result = await window.electronAPI.saveFileDialog(markdownContent, 'untitled.md');
-      if (result.success) {
-        updateFilePath(result.filePath);
-        return true;
-      }
+      // 如果没有路径，显示保存对话框
+      result = await window.electronAPI.saveFileDialog(content);
     }
-    return false;
+    
+    if (result.success) {
+      console.log(`[渲染进程:saveFile] 文件已保存成功: ${result.filePath}`);
+      updateFilePath(result.filePath);
+      return true;
+    } else {
+      console.error(`[渲染进程:saveFile] 保存文件失败:`, result.error);
+      return false;
+    }
   } catch (error) {
-    console.error('保存文件失败:', error);
+    console.error('保存文件时发生错误:', error);
     return false;
   }
 };
@@ -415,7 +419,6 @@ const createNewFile = async () => {
     if (result && result.success) {
       // 清空编辑器内容
       editor.commands.clearContent();
-      currentContent = '';
       
       // 更新路径显示
       updateFilePath(result.filePath);
@@ -518,12 +521,9 @@ const loadFileList = async () => {
           if (currentFilePath && currentFilePath !== file.path) {
             console.log(`[渲染进程] 切换文件前保存当前文件: ${currentFilePath}`);
             try {
-              const saveResult = await window.electronAPI.saveOnEvent();
-              if (saveResult && saveResult.success) {
-                console.log(`[渲染进程] 切换文件前保存成功: ${saveResult.filePath}`);
-              } else if (saveResult) {
-                console.error(`[渲染进程] 切换文件前保存失败: ${saveResult.error}`);
-              }
+              // 使用我们的自动保存功能，直接保存而不等待
+              debouncedAutoSave(true); // 立即保存，不使用延时
+              console.log(`[渲染进程] 已触发自动保存以保存当前文件`);
             } catch (error) {
               console.error('[渲染进程] 切换文件前保存时发生错误:', error);
             }
@@ -777,23 +777,74 @@ const deleteFile = async (filePath) => {
   }
 };
 
-// 打开文件
+// 保存当前文件(如果需要)然后关闭
+// 这个函数用于在打开新文件前关闭当前文件
+const closeCurrentFile = async () => {
+  console.log(`[渲染进程:closeCurrentFile] 开始关闭当前文件: ${currentFilePath}`);
+  
+  // 如果当前没有打开文件，直接返回
+  if (!currentFilePath) {
+    console.log(`[渲染进程:closeCurrentFile] 没有打开文件，无需关闭`);
+    return true;
+  }
+  
+  // 如果当前有文件打开，先保存最新内容
+  if (editor) {
+    try {
+      // 自动保存当前文件
+      console.log(`[渲染进程:closeCurrentFile] 尝试保存当前文件: ${currentFilePath}`);
+      debouncedAutoSave(true); // 立即触发保存，不使用延时
+    } catch (err) {
+      console.error(`[渲染进程:closeCurrentFile] 关闭文件前保存失败:`, err);
+    }
+    
+    // 重置编辑器
+    console.log(`[渲染进程:closeCurrentFile] 清空编辑器内容`);
+    try {
+      editor.commands.clearContent();
+      // 注意：clearHistory 方法不存在，已删除调用
+    } catch (error) {
+      console.error(`[渲染进程:closeCurrentFile] 清空编辑器失败:`, error);
+    }
+  }
+  
+  // 重置状态变量
+  console.log(`[渲染进程:closeCurrentFile] 重置状态变量`);
+  const oldPath = currentFilePath;
+  currentFilePath = null;
+  updateFilePath(null); // 清空路径显示
+  
+  console.log(`[渲染进程:closeCurrentFile] 成功关闭文件: ${oldPath}`);
+  return true;
+};
+
+// 打开文件 - 首先关闭当前文件，然后请求主进程打开新文件
 const openFile = async (filePath) => {
   try {
+    console.log(`[渲染进程:openFile] 开始打开文件: ${filePath}`);
+    
+    // 如果要打开的文件就是当前文件，不做任何操作
+    if (filePath === currentFilePath) {
+      console.log(`[渲染进程:openFile] 要打开的文件就是当前已打开的文件，不重复操作`);
+      return;
+    }
+    
+    // 首先关闭当前文件并清空状态
+    console.log(`[渲染进程:openFile] 先关闭当前文件在打开新文件`);
+    await closeCurrentFile();
+    
+    console.log(`[渲染进程:openFile] 请求主进程打开文件: ${filePath}`);
+    // 请求主进程打开文件
     const result = await window.electronAPI.openFile(filePath);
+    
     if (result && result.success) {
-      // 将 Markdown 转为 HTML 设置到编辑器中
-      const html = marked.parse(result.content);
-      editor.commands.setContent(html);
-      currentContent = html;
-      updateFilePath(result.filePath);
-      updateWordCount(html);
-      
-      // 不再刷新整个文件列表，只更新高亮状态
-      updateFileHighlight(filePath);
+      console.log(`[渲染进程:openFile] 主进程已成功处理文件打开请求`);
+      // 主进程已处理并发送 file-opened 事件，我们在回调函数中处理
+    } else {
+      console.error(`[渲染进程:openFile] 主进程打开文件失败:`, result ? result.error : '未知错误');
     }
   } catch (error) {
-    console.error('打开文件失败:', error);
+    console.error('[渲染进程:openFile] 打开文件失败:', error);
     alert(`打开文件失败: ${error.message}`);
   }
 };
@@ -826,19 +877,20 @@ const bindIpcEvents = () => {
     createNewFile();
   });
   
-  // 监听“无文件”提示事件 - 实现简单直接
+  // 监听"无文件"提示事件 - 实现简单直接
   window.electronAPI.onShowNoFilesMessage(() => {
-    console.log('[渲染进程] 收到 show-no-files-message 事件');
-    // 显示“请先创建文件”的提示
+    console.log('[渲染进程:onShowNoFilesMessage] 收到 show-no-files-message 事件');
+    // 显示"请先创建文件"的提示
     toggleNoFileMessage(true);
     // 清空路径显示
     updateFilePath(null);
     // 清空编辑器内容
     if (editor) {
+      console.log('[渲染进程:onShowNoFilesMessage] 清空编辑器内容');
       editor.commands.clearContent();
-      currentContent = '';
+      // clearHistory 方法不存在，移除调用
     }
-    console.log('[渲染进程] 已显示“请先创建文件”提示');
+    console.log('[渲染进程:onShowNoFilesMessage] 已显示"请先创建文件"提示');
   });
   
   // 这个事件处理器已不再使用，但保留以避免错误
@@ -846,84 +898,122 @@ const bindIpcEvents = () => {
     console.log('[渲染进程] 收到 onOpenRecentAfterDelete 事件，但该事件已过期');
   });
   
-  // 文件被打开
+  // 文件被打开 - 完全重写的文件打开处理程序
   window.electronAPI.onFileOpened((event, { content, filePath }) => {
+    console.log(`[渲染进程:onFileOpened] ============== 开始处理文件打开 ==============`);
     console.log(`[渲染进程:onFileOpened] 收到 file-opened 事件, 文件路径: ${filePath}`);
     console.log(`[渲染进程:onFileOpened] 文件内容长度: ${content ? content.length : 0}`);
+    console.log(`[渲染进程:onFileOpened] 文件内容的前50个字符: "${content ? content.substring(0, 50) : ''}"`);
+    
+    // 防止重复处理同一文件
+    if (filePath === currentFilePath) {
+      // 获取当前编辑器内容
+      const editorContent = editor ? editor.storage.markdown.getMarkdown() : '';
+      // 仅当路径相同，并且内容相同时跳过
+      if (editorContent === content) {
+        console.log(`[渲染进程:onFileOpened] 已经打开了相同的文件，已跳过处理`);
+        return;
+      }
+    }
     
     try {
+      // 清除所有当前编辑器状态
+      console.log(`[渲染进程:onFileOpened] STEP 1: 清除所有当前编辑器状态`); 
+      if (editor) {
+        editor.commands.clearContent();
+      }
+      
+      // 清除所有状态变量
+      console.log(`[渲染进程:onFileOpened] STEP 2: 清除所有状态变量`); 
+      const oldPath = currentFilePath;
+      currentFilePath = null;
+      updateFilePath(null); // 先清空路径显示
+      
+      // 确保编辑器存在
+      console.log(`[渲染进程:onFileOpened] STEP 3: 确保编辑器存在`); 
+      if (!editor) {
+        console.log(`[渲染进程:onFileOpened] 编辑器不存在，初始化它`);
+        initializeEditor(); // 如果编辑器不存在，初始化它
+      }
+      
+      // 检查内容是否为空
+      console.log(`[渲染进程:onFileOpened] STEP 4: 检查内容是否为空`); 
+      if (!content) {
+        console.log(`[渲染进程:onFileOpened] 文件内容为空，使用空字符串`);
+        content = ''; // 确保内容不是null或undefined
+      }
+      
       // 首先确保编辑器容器可见
+      console.log(`[渲染进程:onFileOpened] STEP 5: 设置编辑器可见`); 
       const editorContainer = document.getElementById('editor-container');
       const noFileMessage = document.getElementById('no-file-placeholder');
       
       if (editorContainer && noFileMessage) {
-        console.log(`[渲染进程:onFileOpened] 强制设置编辑器可见状态`);
+        console.log(`[渲染进程:onFileOpened] 清除编辑器可见性状态`);
         editorContainer.classList.remove('hidden');
         noFileMessage.classList.add('hidden');
       }
       
-      // 将 Markdown 转为 HTML
-      console.log(`[渲染进程:onFileOpened] 开始转换文件内容`);
-      const html = marked.parse(content);
-      console.log(`[渲染进程:onFileOpened] 文件内容转换为HTML完成`);
-      
-      // 更新状态
-      currentContent = html;
-      hasOpenedFiles = true;
-      updateFilePath(filePath);
-      
-      // 检查编辑器状态并设置内容
-      if (!editor) {
-        console.error(`[渲染进程:onFileOpened] 编辑器实例不存在！`);
-        initializeEditor(); // 如果编辑器不存在，尝试初始化
-      }
-      
-      // 设置编辑器内容
-      try {
-        console.log(`[渲染进程:onFileOpened] 设置编辑器内容`);
-        editor.commands.setContent(html);
-        console.log(`[渲染进程:onFileOpened] 编辑器内容设置完成`);
-      } catch (editorError) {
-        console.error(`[渲染进程:onFileOpened] 设置编辑器内容失败:`, editorError);
-        // 尝试重新初始化编辑器
-        try {
-          console.log(`[渲染进程:onFileOpened] 尝试重新初始化编辑器`);
-          initializeEditor();
-          // 等待一下再次尝试设置内容
-          setTimeout(() => {
-            editor.commands.setContent(html);
-            console.log(`[渲染进程:onFileOpened] 重新初始化后设置内容成功`);
-          }, 100);
-        } catch (reinitError) {
-          console.error(`[渲染进程:onFileOpened] 重新初始化失败:`, reinitError);
-        }
-      }
-      
-      // 更新字数
-      updateWordCount(html);
-      
-      // 隐藏“请先创建文件”的提示
-      console.log(`[渲染进程:onFileOpened] 调用toggleNoFileMessage隐藏提示`);
-      toggleNoFileMessage(false);
-      
-      // 强制让编辑器获得焦点
+      // 延时设置新文件内容，确保所有清除操作已完成
+      console.log(`[渲染进程:onFileOpened] STEP 6: 延时设置新文件内容`); 
       setTimeout(() => {
         try {
-          editor.commands.focus();
-          console.log(`[渲染进程:onFileOpened] 设置编辑器焦点成功`);
-        } catch (focusError) {
-          console.error(`[渲染进程:onFileOpened] 设置编辑器焦点失败:`, focusError);
+          // 再次清空内容以确保安全
+          console.log(`[渲染进程:onFileOpened] 再次清除编辑器内容以确保安全`);
+          editor.commands.clearContent();
+          
+          // 设置文件路径
+          console.log(`[渲染进程:onFileOpened] 设置新文件路径: ${filePath}`);
+          currentFilePath = filePath;
+          updateFilePath(filePath);
+          
+          // 设置新文件内容
+          console.log(`[渲染进程:onFileOpened] 设置新文件内容，长度: ${content.length}`);
+          // 使用编辑器的 markdown 处理能力直接设置 markdown 内容
+          editor.commands.setContent(content, false, { parseOptions: { preserveWhitespace: 'full' } });
+          
+          // 设置打开文件标记
+          console.log(`[渲染进程:onFileOpened] 更新文件打开状态`);
+          hasOpenedFiles = true;
+          
+          // 更新字数
+          console.log(`[渲染进程:onFileOpened] 更新字数统计`);
+          updateWordCount(content);
+          
+          // 隐藏"请先创建文件"的提示
+          console.log(`[渲染进程:onFileOpened] 隐藏“请先创建文件”提示`);
+          toggleNoFileMessage(false);
+          
+          // 强制让编辑器获得焦点
+          console.log(`[渲染进程:onFileOpened] 让编辑器获取焦点`);
+          try {
+            editor.commands.focus();
+            console.log(`[渲染进程:onFileOpened] 设置编辑器焦点成功`);
+          } catch (focusError) {
+            console.error(`[渲染进程:onFileOpened] 设置编辑器焦点失败:`, focusError);
+          }
+
+          // 更新文件高亮
+          console.log(`[渲染进程:onFileOpened] 更新文件高亮状态`);
+          updateFileHighlight(filePath);
+          
+          // 不使用 clearHistory，因为该方法不存在
+          
+          console.log(`[渲染进程:onFileOpened] 文件打开成功: ${filePath}`);
+          console.log(`[渲染进程:onFileOpened] 文件内容是否已正确设置: ${editor.getHTML().length > 0 ? '是' : '否'}`); 
+        } catch (editorError) {
+          console.error(`[渲染进程:onFileOpened] 设置编辑器内容失败:`, editorError);
         }
-        
-        // 刷新文件列表以突出显示当前文件
-        console.log(`[渲染进程:onFileOpened] 刷新文件列表`);
+      }, 100); // 增加延时确保安全
+      
+      // 刷新文件列表
+      console.log(`[渲染进程:onFileOpened] STEP 7: 刷新文件列表`); 
+      setTimeout(() => {
         loadFileList();
-      }, 100);
+        console.log(`[渲染进程:onFileOpened] 刷新文件列表完成`);
+      }, 200); // 等待编辑器设置完成后再刷新文件列表
       
-      // 强制触发重新渲染
-      window.dispatchEvent(new Event('resize'));
-      
-      console.log(`[渲染进程:onFileOpened] file-opened 事件处理完成`);
+      console.log(`[渲染进程:onFileOpened] ============== 文件打开事件处理完成 ==============`);
     } catch (error) {
       console.error(`[渲染进程:onFileOpened] 处理file-opened事件失败:`, error);
     }
@@ -1120,5 +1210,7 @@ const bindSettingsEvents = () => {
 
 // DOM 加载完成后初始化
 document.addEventListener('DOMContentLoaded', init);
+
+console.log('已加载 tiptap-markdown 扩展，现在直接处理 markdown 内容');
 
 console.log('👋 This message is being logged by "renderer.js", included via webpack');
